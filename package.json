@@ -1,0 +1,138 @@
+{
+  "name": "@c9up/parsec",
+  "version": "0.1.0",
+  "description": "Parsec \u2014 metrics and telemetry for the Ream framework: agnostic instrument contract with a zero-dependency Prometheus driver and an optional OpenTelemetry driver",
+  "license": "MIT",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./provider": {
+      "types": "./src/ParsecProvider.ts",
+      "import": "./src/ParsecProvider.ts"
+    },
+    "./configure": {
+      "types": "./src/configure.ts",
+      "import": "./src/configure.ts"
+    },
+    "./services/main": {
+      "types": "./src/services/main.ts",
+      "import": "./src/services/main.ts"
+    },
+    "./testing": {
+      "types": "./src/testing/main.ts",
+      "import": "./src/testing/main.ts"
+    },
+    "./http": {
+      "types": "./src/http.ts",
+      "import": "./src/http.ts"
+    },
+    "./prometheus": {
+      "types": "./src/drivers/PrometheusDriver.ts",
+      "import": "./src/drivers/PrometheusDriver.ts"
+    },
+    "./otel": {
+      "types": "./src/drivers/OtelDriver.ts",
+      "import": "./src/drivers/OtelDriver.ts"
+    },
+    "./endpoint": {
+      "types": "./src/endpoint.ts",
+      "import": "./src/endpoint.ts"
+    },
+    "./diagnostics": {
+      "types": "./src/diagnostics.ts",
+      "import": "./src/diagnostics.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "lint": "biome check src/ tests/",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "peerDependencies": {
+    "@c9up/ream": "^0.2.0",
+    "@opentelemetry/api": "^1.9.0"
+  },
+  "peerDependenciesMeta": {
+    "@c9up/ream": {
+      "optional": true
+    },
+    "@opentelemetry/api": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.12",
+    "@c9up/ream": "^0.2.0",
+    "@types/node": "^22.20.1",
+    "@vitest/coverage-v8": "4.1.11",
+    "typescript": "^6.0.3",
+    "vitest": "4.1.11"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "files": [
+    "src",
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      },
+      "./provider": {
+        "types": "./dist/ParsecProvider.d.ts",
+        "import": "./dist/ParsecProvider.js"
+      },
+      "./configure": {
+        "types": "./dist/configure.d.ts",
+        "import": "./dist/configure.js"
+      },
+      "./services/main": {
+        "types": "./dist/services/main.d.ts",
+        "import": "./dist/services/main.js"
+      },
+      "./testing": {
+        "types": "./dist/testing/main.d.ts",
+        "import": "./dist/testing/main.js"
+      },
+      "./http": {
+        "types": "./dist/http.d.ts",
+        "import": "./dist/http.js"
+      },
+      "./prometheus": {
+        "types": "./dist/drivers/PrometheusDriver.d.ts",
+        "import": "./dist/drivers/PrometheusDriver.js"
+      },
+      "./otel": {
+        "types": "./dist/drivers/OtelDriver.d.ts",
+        "import": "./dist/drivers/OtelDriver.js"
+      },
+      "./endpoint": {
+        "types": "./dist/endpoint.d.ts",
+        "import": "./dist/endpoint.js"
+      },
+      "./diagnostics": {
+        "types": "./dist/diagnostics.d.ts",
+        "import": "./dist/diagnostics.js"
+      }
+    },
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/C9up/parsec.git"
+  }
+}
