@@ -31,7 +31,7 @@ jobs:
         with: { version: 9 }
       - uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          node-version: '24'
       - run: pnpm install
       - run: pnpm exec tsc -p tsconfig.build.json --noEmit
       # The build project excludes `tests`, so a type error in a test file
@@ -65,7 +65,7 @@ jobs:
         with: { version: 9 }
       - uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
       - name: Verify NPM_TOKEN secret
         run: |
