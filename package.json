@@ -1,6 +1,6 @@
 {
   "name": "@c9up/parsec",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Parsec — metrics and telemetry for the Ream framework: agnostic instrument contract with a zero-dependency Prometheus driver and an optional OpenTelemetry driver",
   "license": "MIT",
   "type": "module",
