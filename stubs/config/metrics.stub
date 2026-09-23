@@ -1,0 +1,21 @@
+---
+to: config/metrics.ts
+---
+import { defineConfig, drivers } from '@c9up/parsec'
+import env from '#start/env'
+
+export default defineConfig({
+  default: env.get('METRICS_EXPORTER', 'prometheus'),
+
+  exporters: {
+    // Scraped. Holds series in memory and renders them on /metrics.
+    prometheus: drivers.prometheus({
+      // Distinct label combinations one instrument may hold. A label fed
+      // from a request is what makes this grow without bound.
+      maxSeries: 1000,
+    }),
+
+    // Measures nothing, at the cost of one empty call per measurement.
+    noop: drivers.noop(),
+  },
+})

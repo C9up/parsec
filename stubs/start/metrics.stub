@@ -1,0 +1,16 @@
+---
+to: start/metrics.ts
+---
+import router from '@c9up/ream/services/router'
+import metrics from '@c9up/parsec/services/main'
+import { metricsHandler } from '@c9up/parsec/endpoint'
+import env from '#start/env'
+
+/**
+ * The scrape endpoint. Behind a bearer token by default — leaving
+ * METRICS_TOKEN empty publishes your route table to anyone who asks.
+ */
+router.get(
+  '/__metrics',
+  metricsHandler(metrics, { token: env.get('METRICS_TOKEN') || undefined }),
+)
