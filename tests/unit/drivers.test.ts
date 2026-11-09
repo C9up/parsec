@@ -29,9 +29,13 @@ function meter() {
 	const add = vi.fn();
 	const record = vi.fn();
 	const gaugeRecord = vi.fn();
-	const created: { histogram?: Record<string, unknown> } = {};
+	const created: { histogram?: object; counter?: object } = {};
 	const m: OtelMeter = {
-		createCounter: () => ({ add }),
+		createCounter: (name, options) => {
+			if (name !== "parsec_series_dropped_total")
+				created.counter = options ?? {};
+			return { add };
+		},
 		createGauge: () => ({ record: gaugeRecord }),
 		createHistogram: (_name, options) => {
 			created.histogram = options ?? {};
@@ -45,17 +49,22 @@ describe("OtelDriver", () => {
 	it("forwards a counter to the meter with its attributes", () => {
 		const { meter: m, add } = meter();
 		new OtelDriver({ meter: m })
-			.createCounter({ name: "orders_total", help: "Orders." })
+			.createCounter({
+				name: "orders_total",
+				help: "Orders.",
+				labelNames: ["region"],
+			})
 			.increment(3, { region: "eu" });
 		expect(add).toHaveBeenCalledWith(3, { region: "eu" });
 	});
 
-	it("declares seconds as the histogram unit, so an exporter can rename it", () => {
+	it("passes the declared unit, so an exporter can rename the series", () => {
 		const { meter: m, created } = meter();
 		new OtelDriver({ meter: m }).createHistogram({
 			name: "d_seconds",
 			help: "d",
 			buckets: [1, 2],
+			unit: "s",
 		});
 		expect(created.histogram).toMatchObject({
 			unit: "s",
@@ -68,6 +77,7 @@ describe("OtelDriver", () => {
 		const gauge = new OtelDriver({ meter: m }).createGauge({
 			name: "g",
 			help: "g",
+			labelNames: ["a"],
 		});
 		gauge.set(10, { a: "1" });
 		gauge.increment(5, { a: "1" });
@@ -80,6 +90,7 @@ describe("OtelDriver", () => {
 		const gauge = new OtelDriver({ meter: m }).createGauge({
 			name: "g",
 			help: "g",
+			labelNames: ["a"],
 		});
 		gauge.set(10, { a: "1" });
 		gauge.set(100, { a: "2" });
@@ -88,12 +99,15 @@ describe("OtelDriver", () => {
 	});
 
 	it("builds an instrument once per name, as the Prometheus driver does", () => {
-		const createCounter = vi.fn(() => ({ add: vi.fn() }));
+		const createCounter = vi.fn((_name: string) => ({ add: vi.fn() }));
 		const { meter: m } = meter();
 		const driver = new OtelDriver({ meter: { ...m, createCounter } });
 		driver.createCounter({ name: "c_total", help: "c" });
 		driver.createCounter({ name: "c_total", help: "c" });
-		expect(createCounter).toHaveBeenCalledTimes(1);
+		const forC = createCounter.mock.calls.filter(
+			([name]) => name === "c_total",
+		);
+		expect(forC).toHaveLength(1);
 	});
 
 	it("has nothing to scrape — it pushes", () => {
@@ -117,7 +131,7 @@ describe("OtelDriver", () => {
 	it("forwards a histogram observation to the meter", () => {
 		const { meter: m, record } = meter();
 		new OtelDriver({ meter: m })
-			.createHistogram({ name: "d_seconds", help: "d" })
+			.createHistogram({ name: "d_seconds", help: "d", labelNames: ["route"] })
 			.observe(1.5, { route: "/x" });
 		expect(record).toHaveBeenCalledWith(1.5, { route: "/x" });
 	});
@@ -164,5 +178,41 @@ describe("OtelDriver", () => {
 		expect(created.histogram).toMatchObject({
 			advice: { explicitBucketBoundaries: [1, 2] },
 		});
+	});
+
+	it("states no unit for a histogram with its own buckets and no declared unit", () => {
+		// payload_bytes exported as seconds would be renamed `_seconds` by an
+		// OTel-to-Prometheus exporter.
+		const { meter: m, created } = meter();
+		new OtelDriver({ meter: m }).createHistogram({
+			name: "payload_bytes",
+			help: "p",
+			buckets: [1024, 65536],
+		});
+		expect(created.histogram).not.toHaveProperty("unit");
+		new OtelDriver({ meter: m }).createHistogram({
+			name: "payload_bytes",
+			help: "p",
+			buckets: [1024, 65536],
+			unit: "By",
+		});
+		expect(created.histogram).toMatchObject({ unit: "By" });
+	});
+
+	it("passes a counter's unit, and refuses one OpenTelemetry cannot carry", () => {
+		const { meter: m, created } = meter();
+		const driver = new OtelDriver({ meter: m });
+		driver.createCounter({ name: "bytes_total", help: "b", unit: "By" });
+		expect(created.counter).toEqual({ description: "b", unit: "By" });
+		expect(() =>
+			driver.createCounter({ name: "x_total", help: "x", unit: "has space" }),
+		).toThrow(expect.objectContaining({ code: "E_PARSEC_INVALID_INSTRUMENT" }));
+		expect(() =>
+			driver.createCounter({
+				name: "y_total",
+				help: "y",
+				unit: "u".repeat(64),
+			}),
+		).toThrow(expect.objectContaining({ code: "E_PARSEC_INVALID_INSTRUMENT" }));
 	});
 });

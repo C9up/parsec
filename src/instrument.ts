@@ -7,12 +7,167 @@
  */
 
 import {
+	InstrumentConflictError,
 	InvalidInstrumentError,
 	InvalidLabelValueError,
+	InvalidMeasurementError,
 	InvalidMetricNameError,
 	UndeclaredLabelError,
 } from "./errors.js";
-import type { Labels } from "./types.js";
+import { assertLabelName, assertMetricName } from "./exposition.js";
+import type { InstrumentOptions, Labels } from "./types.js";
+
+/** A declaration that passed {@link declareInstrument}. */
+export interface Declaration {
+	name: string;
+	help: string;
+	labelNames: readonly string[];
+	unit: string | undefined;
+}
+
+/**
+ * OpenTelemetry's unit syntax: printable ASCII, at most 63 characters. Checked
+ * on every driver so a unit accepted under Prometheus is not refused once the
+ * same code exports through OTel.
+ */
+const UNIT = /^[\x21-\x7e]{1,63}$/;
+
+/**
+ * Validate an instrument's declaration: name, help, label names, unit.
+ *
+ * At declaration, deliberately — an invalid name accepted here produces a
+ * scrape body Prometheus rejects wholesale, or a series the OTel SDK drops
+ * with a warning nobody reads.
+ */
+export function declareInstrument(options: InstrumentOptions): Declaration {
+	assertMetricName(options.name);
+	assertHelp(options.name, options.help);
+	const labelNames = options.labelNames ?? [];
+	if (!Array.isArray(labelNames)) {
+		throw new InvalidInstrumentError(
+			options.name,
+			"labelNames must be an array",
+		);
+	}
+	const seen = new Set<string>();
+	for (const label of labelNames) {
+		assertLabelName(label);
+		// Declared twice, a label renders twice on one line, which the
+		// scraper rejects along with everything else in the body.
+		if (seen.has(label)) {
+			throw new InvalidMetricNameError("label", label, "it is declared twice");
+		}
+		seen.add(label);
+	}
+	const unit = options.unit;
+	if (unit !== undefined && (typeof unit !== "string" || !UNIT.test(unit))) {
+		throw new InvalidInstrumentError(
+			options.name,
+			"its unit must be 1 to 63 printable ASCII characters",
+		);
+	}
+	return {
+		name: options.name,
+		help: options.help,
+		labelNames: [...labelNames],
+		unit,
+	};
+}
+
+/**
+ * Validate a measurement.
+ *
+ * Non-finite values poison a sum forever. A negative counter increment makes
+ * every rate() over the window negative and reads downstream as a restart; a
+ * negative histogram observation is dropped by the OpenTelemetry SDK with
+ * only a diagnostic warning, so it is refused on every driver rather than
+ * accepted by one and silently lost by the other.
+ */
+export function assertMeasurement(
+	metric: string,
+	value: number,
+	nonNegative: boolean,
+): void {
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		throw new InvalidMeasurementError(metric, value);
+	}
+	if (nonNegative && value < 0) {
+		throw new InvalidMeasurementError(metric, value);
+	}
+}
+
+type Entry<C, G, H> =
+	| { kind: "counter"; labelNames: readonly string[]; instrument: C }
+	| { kind: "gauge"; labelNames: readonly string[]; instrument: G }
+	| { kind: "histogram"; labelNames: readonly string[]; instrument: H };
+
+/**
+ * Instruments by name, built once.
+ *
+ * Declaring the same name twice is normal — two modules instrumenting the
+ * same thing — and returns the existing instrument, because a caller that
+ * creates one per request is the other half of the cardinality problem.
+ * Declaring it with a DIFFERENT type or label set is a bug that would
+ * otherwise export two incompatible series under one name.
+ */
+export class InstrumentRegistry<C, G, H> {
+	readonly #entries = new Map<string, Entry<C, G, H>>();
+
+	#existing(
+		kind: Entry<C, G, H>["kind"],
+		name: string,
+		labelNames: readonly string[],
+	): Entry<C, G, H> | undefined {
+		const existing = this.#entries.get(name);
+		if (!existing) return undefined;
+		if (existing.kind !== kind) throw new InstrumentConflictError(name, "type");
+		const same =
+			existing.labelNames.length === labelNames.length &&
+			existing.labelNames.every((label, i) => label === labelNames[i]);
+		if (!same) throw new InstrumentConflictError(name, "label set");
+		return existing;
+	}
+
+	counter(declaration: Declaration, build: () => C): C {
+		const { name, labelNames } = declaration;
+		const existing = this.#existing("counter", name, labelNames);
+		if (existing?.kind === "counter") return existing.instrument;
+		const instrument = build();
+		this.#entries.set(name, { kind: "counter", labelNames, instrument });
+		return instrument;
+	}
+
+	gauge(declaration: Declaration, build: () => G): G {
+		const { name, labelNames } = declaration;
+		const existing = this.#existing("gauge", name, labelNames);
+		if (existing?.kind === "gauge") return existing.instrument;
+		const instrument = build();
+		this.#entries.set(name, { kind: "gauge", labelNames, instrument });
+		return instrument;
+	}
+
+	histogram(declaration: Declaration, build: () => H): H {
+		const { name, labelNames } = declaration;
+		const existing = this.#existing("histogram", name, labelNames);
+		if (existing?.kind === "histogram") return existing.instrument;
+		const instrument = build();
+		this.#entries.set(name, { kind: "histogram", labelNames, instrument });
+		return instrument;
+	}
+
+	/** Every instrument, in declaration order. */
+	*instruments(): IterableIterator<C | G | H> {
+		for (const entry of this.#entries.values()) yield entry.instrument;
+	}
+}
+
+/** Name of the built-in counter that reports the cap being hit. */
+export const DROPPED_METRIC = "parsec_series_dropped_total";
+export const DROPPED_HELP =
+	"Series refused because an instrument reached its cardinality cap.";
+
+/** How many label combinations one instrument holds when nothing says otherwise. */
+export const DEFAULT_MAX_SERIES = 1_000;
 
 /** Validate a HELP text at declaration. */
 export function assertHelp(name: string, help: unknown): void {
@@ -125,4 +280,22 @@ export function histogramBuckets(
 	// makes the histogram non-monotonic and every quantile derived from it
 	// wrong.
 	return [...new Set(finite)].sort((a, b) => a - b);
+}
+
+/**
+ * Time `work`, hand the elapsed SECONDS to `record`, return its result.
+ *
+ * Records on the way out either way: dropping the calls that threw is how a
+ * latency chart stays flat through an incident.
+ */
+export async function timed<T>(
+	work: () => Promise<T>,
+	record: (seconds: number) => void,
+): Promise<T> {
+	const started = process.hrtime.bigint();
+	try {
+		return await work();
+	} finally {
+		record(Number(process.hrtime.bigint() - started) / 1e9);
+	}
 }

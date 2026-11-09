@@ -62,6 +62,14 @@ export interface InstrumentOptions {
 	 * rather than a slow memory leak — see {@link DriverOptions.maxSeries}.
 	 */
 	labelNames?: readonly string[];
+	/**
+	 * The unit of the values, OpenTelemetry-style (`s`, `By`, `1`), exported
+	 * by drivers that carry one. Histograms default to `s` when they also use
+	 * the default latency buckets, which are seconds; anything else states its
+	 * own unit or has none. The Prometheus text format has no unit line — put
+	 * it in the name there (`_seconds`, `_bytes`).
+	 */
+	unit?: string;
 }
 
 export interface HistogramOptions extends InstrumentOptions {

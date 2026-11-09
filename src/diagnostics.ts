@@ -44,6 +44,8 @@ export function instrumentHealthChecks(metrics: MetricsManager): () => void {
 		// A health check is not a web request: seconds-scale is the interesting
 		// range, and the default web ladder wastes most of its buckets below it.
 		buckets: [0.01, 0.05, 0.1, 0.5, 1, 5, 30],
+		// Its own buckets, so its unit is stated rather than defaulted.
+		unit: "s",
 	});
 	const failures = metrics.counter({
 		name: "health_check_failures_total",

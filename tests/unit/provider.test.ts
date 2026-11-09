@@ -208,7 +208,7 @@ describe("MetricsManager", () => {
 		metrics.counter({ name: "a_total", help: "a" }).increment();
 		metrics.use("otel").counter({ name: "a_total", help: "a" }).increment();
 		expect(await metrics.scrape()).toContain("a_total 1");
-		expect(record).toHaveBeenCalledWith(1, undefined);
+		expect(record).toHaveBeenCalledWith(1, {});
 	});
 
 	it("measures nothing when built with no config at all", async () => {

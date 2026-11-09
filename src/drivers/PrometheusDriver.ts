@@ -6,19 +6,19 @@
  * shut down.
  */
 
-import { InstrumentConflictError, InvalidMeasurementError } from "../errors.js";
+import { formatMetadata, formatSample, formatValue } from "../exposition.js";
 import {
-	assertLabelName,
-	assertMetricName,
-	formatMetadata,
-	formatSample,
-	formatValue,
-} from "../exposition.js";
-import {
-	assertHelp,
+	assertMeasurement,
+	DEFAULT_MAX_SERIES,
+	type Declaration,
+	DROPPED_HELP,
+	DROPPED_METRIC,
+	declareInstrument,
 	histogramBuckets,
+	InstrumentRegistry,
 	normaliseLabels,
 	seriesKey,
+	timed,
 } from "../instrument.js";
 import type {
 	Counter,
@@ -30,11 +30,6 @@ import type {
 	Labels,
 	MetricsDriver,
 } from "../types.js";
-
-const DEFAULT_MAX_SERIES = 1_000;
-
-/** Name of the built-in counter that reports the cap being hit. */
-const DROPPED = "parsec_series_dropped_total";
 
 interface Series {
 	labels: Record<string, string>;
@@ -57,16 +52,13 @@ abstract class Instrument {
 	readonly #onDropped: (metric: string) => void;
 
 	constructor(
-		options: InstrumentOptions,
+		declaration: Declaration,
 		maxSeries: number,
 		onDropped: (metric: string) => void,
 	) {
-		assertMetricName(options.name);
-		assertHelp(options.name, options.help);
-		for (const label of options.labelNames ?? []) assertLabelName(label);
-		this.name = options.name;
-		this.help = options.help;
-		this.labelNames = options.labelNames ?? [];
+		this.name = declaration.name;
+		this.help = declaration.help;
+		this.labelNames = declaration.labelNames;
 		this.#maxSeries = maxSeries;
 		this.#onDropped = onDropped;
 	}
@@ -74,12 +66,6 @@ abstract class Instrument {
 	/** Every declared label present, each value a string; see {@link normaliseLabels}. */
 	protected normalise(labels: Labels | undefined): Record<string, string> {
 		return normaliseLabels(this.name, this.labelNames, labels);
-	}
-
-	protected assertFinite(value: number): void {
-		if (typeof value !== "number" || !Number.isFinite(value)) {
-			throw new InvalidMeasurementError(this.name, value);
-		}
 	}
 
 	/**
@@ -104,11 +90,7 @@ class PromCounter extends Instrument implements Counter {
 	readonly #series = new Map<string, Series>();
 
 	increment(value = 1, labels?: Labels): void {
-		this.assertFinite(value);
-		// A counter only goes up. A negative increment does not produce a wrong
-		// number once — it makes every rate() over the window negative, and the
-		// scraper reads the drop as a process restart.
-		if (value < 0) throw new InvalidMeasurementError(this.name, value);
+		assertMeasurement(this.name, value, true);
 		const normalised = this.normalise(labels);
 		const key = seriesKey(this.labelNames, normalised);
 		const existing = this.#series.get(key);
@@ -145,19 +127,19 @@ class PromGauge extends Instrument implements Gauge {
 	}
 
 	set(value: number, labels?: Labels): void {
-		this.assertFinite(value);
+		assertMeasurement(this.name, value, false);
 		const series = this.#at(labels);
 		if (series) series.value = value;
 	}
 
 	increment(value = 1, labels?: Labels): void {
-		this.assertFinite(value);
+		assertMeasurement(this.name, value, false);
 		const series = this.#at(labels);
 		if (series) series.value += value;
 	}
 
 	decrement(value = 1, labels?: Labels): void {
-		this.assertFinite(value);
+		assertMeasurement(this.name, value, false);
 		const series = this.#at(labels);
 		if (series) series.value -= value;
 	}
@@ -177,20 +159,17 @@ class PromHistogram extends Instrument implements Histogram {
 	readonly #buckets: readonly number[];
 
 	constructor(
-		options: HistogramOptions,
+		declaration: Declaration,
+		buckets: readonly number[],
 		maxSeries: number,
 		onDropped: (metric: string) => void,
 	) {
-		super(options, maxSeries, onDropped);
-		this.#buckets = histogramBuckets(
-			options.name,
-			this.labelNames,
-			options.buckets,
-		);
+		super(declaration, maxSeries, onDropped);
+		this.#buckets = buckets;
 	}
 
 	observe(value: number, labels?: Labels): void {
-		this.assertFinite(value);
+		assertMeasurement(this.name, value, true);
 		const normalised = this.normalise(labels);
 		const key = seriesKey(this.labelNames, normalised);
 		let series = this.#series.get(key);
@@ -218,16 +197,8 @@ class PromHistogram extends Instrument implements Histogram {
 		}
 	}
 
-	async time<T>(work: () => Promise<T>, labels?: Labels): Promise<T> {
-		const started = process.hrtime.bigint();
-		try {
-			return await work();
-		} finally {
-			// Recorded even when the work threw. Dropping failed calls is how a
-			// latency chart stays flat through an incident.
-			const seconds = Number(process.hrtime.bigint() - started) / 1e9;
-			this.observe(seconds, labels);
-		}
+	time<T>(work: () => Promise<T>, labels?: Labels): Promise<T> {
+		return timed(work, (seconds) => this.observe(seconds, labels));
 	}
 
 	render(): string[] {
@@ -264,7 +235,11 @@ class PromHistogram extends Instrument implements Histogram {
 }
 
 export class PrometheusDriver implements MetricsDriver {
-	readonly #instruments = new Map<string, Instrument>();
+	readonly #instruments = new InstrumentRegistry<
+		PromCounter,
+		PromGauge,
+		PromHistogram
+	>();
 	readonly #maxSeries: number;
 	readonly #dropped: PromCounter;
 
@@ -273,91 +248,62 @@ export class PrometheusDriver implements MetricsDriver {
 		// Built eagerly and labelled by metric NAME — a bounded, non-request
 		// value. A counter that reported the dropped LABEL VALUE would
 		// reintroduce exactly the unbounded set it exists to report.
-		this.#dropped = new PromCounter(
-			{
-				name: DROPPED,
-				help: "Series refused because an instrument reached its cardinality cap.",
-				labelNames: ["metric"],
-			},
-			// Bounded by the number of instruments, which is bounded by code.
-			Number.MAX_SAFE_INTEGER,
-			() => {},
+		const declaration = declareInstrument({
+			name: DROPPED_METRIC,
+			help: DROPPED_HELP,
+			labelNames: ["metric"],
+		});
+		this.#dropped = this.#instruments.counter(
+			declaration,
+			() =>
+				// Bounded by the number of instruments, which is bounded by code.
+				new PromCounter(declaration, Number.MAX_SAFE_INTEGER, () => {}),
 		);
-		this.#instruments.set(DROPPED, this.#dropped);
 	}
 
 	#onDropped = (metric: string): void => {
 		this.#dropped.increment(1, { metric });
 	};
 
-	/**
-	 * Return the existing instrument for a name, or `undefined`.
-	 *
-	 * Declaring the same name twice is normal — two modules instrumenting the
-	 * same thing — but declaring it with a DIFFERENT shape is a bug that would
-	 * otherwise render two incompatible series under one name.
-	 */
-	#reuse<T extends Instrument>(
-		name: string,
-		kind: abstract new (...args: never[]) => T,
-		labelNames: readonly string[],
-	): T | undefined {
-		const existing = this.#instruments.get(name);
-		if (!existing) return undefined;
-		if (!(existing instanceof kind)) {
-			throw new InstrumentConflictError(name, "type");
-		}
-		const same =
-			existing.labelNames.length === labelNames.length &&
-			existing.labelNames.every((label, i) => label === labelNames[i]);
-		if (!same) throw new InstrumentConflictError(name, "label set");
-		return existing;
-	}
-
 	createCounter(options: InstrumentOptions): Counter {
-		const reused = this.#reuse(
-			options.name,
-			PromCounter,
-			options.labelNames ?? [],
+		const declaration = declareInstrument(options);
+		return this.#instruments.counter(
+			declaration,
+			() => new PromCounter(declaration, this.#maxSeries, this.#onDropped),
 		);
-		if (reused) return reused;
-		const counter = new PromCounter(options, this.#maxSeries, this.#onDropped);
-		this.#instruments.set(options.name, counter);
-		return counter;
 	}
 
 	createGauge(options: InstrumentOptions): Gauge {
-		const reused = this.#reuse(
-			options.name,
-			PromGauge,
-			options.labelNames ?? [],
+		const declaration = declareInstrument(options);
+		return this.#instruments.gauge(
+			declaration,
+			() => new PromGauge(declaration, this.#maxSeries, this.#onDropped),
 		);
-		if (reused) return reused;
-		const gauge = new PromGauge(options, this.#maxSeries, this.#onDropped);
-		this.#instruments.set(options.name, gauge);
-		return gauge;
 	}
 
 	createHistogram(options: HistogramOptions): Histogram {
-		const reused = this.#reuse(
-			options.name,
-			PromHistogram,
-			options.labelNames ?? [],
+		const declaration = declareInstrument(options);
+		const buckets = histogramBuckets(
+			declaration.name,
+			declaration.labelNames,
+			options.buckets,
 		);
-		if (reused) return reused;
-		const histogram = new PromHistogram(
-			options,
-			this.#maxSeries,
-			this.#onDropped,
+		return this.#instruments.histogram(
+			declaration,
+			() =>
+				new PromHistogram(
+					declaration,
+					buckets,
+					this.#maxSeries,
+					this.#onDropped,
+				),
 		);
-		this.#instruments.set(options.name, histogram);
-		return histogram;
 	}
 
 	/** The scrape body. Ends with a newline, which the format requires. */
 	scrape(): string {
 		const blocks: string[] = [];
-		for (const instrument of this.#instruments.values()) {
+		for (const instrument of this.#instruments.instruments()) {
 			const lines = instrument.render();
 			if (lines.length > 0) blocks.push(lines.join("\n"));
 		}

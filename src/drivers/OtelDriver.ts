@@ -10,11 +10,30 @@
  *
  *   import { metrics } from "@opentelemetry/api"
  *   drivers.otel({ meter: metrics.getMeter("my-app") })
+ *
+ * The instrument contract is the shared one: the same names, labels, values
+ * and cardinality cap are refused here as under Prometheus, BEFORE the meter
+ * sees them. Left to the SDK, an invalid name or a negative value is dropped
+ * with a diagnostic warning, and switching METRICS_EXPORTER would change what
+ * the application's own code is allowed to do.
  */
 
-import { histogramBuckets } from "../instrument.js";
+import {
+	assertMeasurement,
+	DEFAULT_MAX_SERIES,
+	type Declaration,
+	DROPPED_HELP,
+	DROPPED_METRIC,
+	declareInstrument,
+	histogramBuckets,
+	InstrumentRegistry,
+	normaliseLabels,
+	seriesKey,
+	timed,
+} from "../instrument.js";
 import type {
 	Counter,
+	DriverOptions,
 	Gauge,
 	Histogram,
 	HistogramOptions,
@@ -23,12 +42,20 @@ import type {
 	MetricsDriver,
 } from "../types.js";
 
+/** The attributes handed to the meter: every declared label, as a string. */
+type Attributes = Readonly<Record<string, string>>;
+
 /** The slice of an OTel instrument this uses. */
 interface OtelAdder {
-	add(value: number, attributes?: Labels): void;
+	add(value: number, attributes?: Attributes): void;
 }
 interface OtelRecorder {
-	record(value: number, attributes?: Labels): void;
+	record(value: number, attributes?: Attributes): void;
+}
+
+interface OtelInstrumentOptions {
+	description?: string;
+	unit?: string;
 }
 
 /**
@@ -40,142 +67,256 @@ interface OtelRecorder {
  * schedule.
  */
 export interface OtelMeter {
-	createCounter(name: string, options?: { description?: string }): OtelAdder;
-	createGauge(name: string, options?: { description?: string }): OtelRecorder;
+	createCounter(name: string, options?: OtelInstrumentOptions): OtelAdder;
+	createGauge(name: string, options?: OtelInstrumentOptions): OtelRecorder;
 	createHistogram(
 		name: string,
-		options?: {
-			description?: string;
-			unit?: string;
+		options?: OtelInstrumentOptions & {
 			advice?: { explicitBucketBoundaries?: number[] };
 		},
 	): OtelRecorder;
 }
 
-export interface OtelDriverOptions {
+export interface OtelDriverOptions extends DriverOptions {
 	meter: OtelMeter;
 }
 
-class OtelCounter implements Counter {
-	readonly #instrument: OtelAdder;
-	constructor(instrument: OtelAdder) {
-		this.#instrument = instrument;
+/**
+ * The cardinality cap, on parsec's side of the meter.
+ *
+ * The SDK has its own limit, but the gauge below keeps a value per label set
+ * in parsec's memory, in front of it; and the contract promises the same cap
+ * — and the same `parsec_series_dropped_total` — whichever driver is
+ * configured. Only the keys are kept, never more than `maxSeries` of them.
+ */
+class SeriesGate {
+	readonly #declaration: Declaration;
+	readonly #keys = new Set<string>();
+	readonly #maxSeries: number;
+	readonly #onDropped: (metric: string) => void;
+
+	constructor(
+		declaration: Declaration,
+		maxSeries: number,
+		onDropped: (metric: string) => void,
+	) {
+		this.#declaration = declaration;
+		this.#maxSeries = maxSeries;
+		this.#onDropped = onDropped;
 	}
+
+	/** The normalised attributes and their key, or `undefined` when refused. */
+	admit(
+		labels: Labels | undefined,
+	): { key: string; attributes: Attributes } | undefined {
+		const { name, labelNames } = this.#declaration;
+		const attributes = normaliseLabels(name, labelNames, labels);
+		const key = seriesKey(labelNames, attributes);
+		if (this.#keys.has(key)) return { key, attributes };
+		if (this.#keys.size >= this.#maxSeries) {
+			this.#onDropped(name);
+			return undefined;
+		}
+		this.#keys.add(key);
+		return { key, attributes };
+	}
+}
+
+class OtelCounter implements Counter {
+	readonly #name: string;
+	readonly #instrument: OtelAdder;
+	readonly #gate: SeriesGate;
+
+	constructor(name: string, instrument: OtelAdder, gate: SeriesGate) {
+		this.#name = name;
+		this.#instrument = instrument;
+		this.#gate = gate;
+	}
+
 	increment(value = 1, labels?: Labels): void {
-		this.#instrument.add(value, labels);
+		assertMeasurement(this.#name, value, true);
+		const series = this.#gate.admit(labels);
+		if (series) this.#instrument.add(value, series.attributes);
 	}
 }
 
 class OtelGauge implements Gauge {
+	readonly #name: string;
 	readonly #gauge: OtelRecorder;
+	readonly #gate: SeriesGate;
 	/**
-	 * The last value per label set.
+	 * The last value per ADMITTED label set, so bounded by the cap.
 	 *
 	 * OTel's synchronous gauge only takes absolute values, while the contract
 	 * also offers increment/decrement. Keeping the last value is the only way
 	 * to express a relative change against an absolute-only instrument.
 	 */
 	readonly #last = new Map<string, number>();
-	constructor(gauge: OtelRecorder) {
+
+	constructor(name: string, gauge: OtelRecorder, gate: SeriesGate) {
+		this.#name = name;
 		this.#gauge = gauge;
+		this.#gate = gate;
 	}
-	#key(labels: Labels | undefined): string {
-		if (!labels) return "";
-		return Object.entries(labels)
-			.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-			.map(([k, v]) => `${k}=${v}`)
-			.join(",");
+
+	#apply(labels: Labels | undefined, next: (last: number) => number): void {
+		const series = this.#gate.admit(labels);
+		if (!series) return;
+		const value = next(this.#last.get(series.key) ?? 0);
+		this.#last.set(series.key, value);
+		this.#gauge.record(value, series.attributes);
 	}
+
 	set(value: number, labels?: Labels): void {
-		this.#last.set(this.#key(labels), value);
-		this.#gauge.record(value, labels);
+		assertMeasurement(this.#name, value, false);
+		this.#apply(labels, () => value);
 	}
+
 	increment(value = 1, labels?: Labels): void {
-		this.set((this.#last.get(this.#key(labels)) ?? 0) + value, labels);
+		assertMeasurement(this.#name, value, false);
+		this.#apply(labels, (last) => last + value);
 	}
+
 	decrement(value = 1, labels?: Labels): void {
-		this.increment(-value, labels);
+		assertMeasurement(this.#name, value, false);
+		this.#apply(labels, (last) => last - value);
 	}
 }
 
 class OtelHistogram implements Histogram {
+	readonly #name: string;
 	readonly #instrument: OtelRecorder;
-	constructor(instrument: OtelRecorder) {
+	readonly #gate: SeriesGate;
+
+	constructor(name: string, instrument: OtelRecorder, gate: SeriesGate) {
+		this.#name = name;
 		this.#instrument = instrument;
+		this.#gate = gate;
 	}
+
 	observe(value: number, labels?: Labels): void {
-		this.#instrument.record(value, labels);
+		assertMeasurement(this.#name, value, true);
+		const series = this.#gate.admit(labels);
+		if (series) this.#instrument.record(value, series.attributes);
 	}
-	async time<T>(work: () => Promise<T>, labels?: Labels): Promise<T> {
-		const started = process.hrtime.bigint();
-		try {
-			return await work();
-		} finally {
-			this.observe(Number(process.hrtime.bigint() - started) / 1e9, labels);
-		}
+
+	time<T>(work: () => Promise<T>, labels?: Labels): Promise<T> {
+		return timed(work, (seconds) => this.observe(seconds, labels));
 	}
+}
+
+/** `description` always, `unit` only when there is one. */
+function instrumentOptions(declaration: Declaration): OtelInstrumentOptions {
+	return declaration.unit === undefined
+		? { description: declaration.help }
+		: { description: declaration.help, unit: declaration.unit };
 }
 
 export class OtelDriver implements MetricsDriver {
 	readonly #meter: OtelMeter;
-	/**
-	 * One registry per instrument kind, rather than one keyed by name.
-	 *
-	 * Instruments are built once per name here as well as in the Prometheus
-	 * driver — an application that creates one per request is the other half
-	 * of the cardinality problem, and it must behave the same on both. Keeping
-	 * them apart by kind is what lets the lookup return the right type without
-	 * an unchecked cast asserting what a single shared map could not prove.
-	 */
-	readonly #counters = new Map<string, Counter>();
-	readonly #gauges = new Map<string, Gauge>();
-	readonly #histograms = new Map<string, Histogram>();
+	readonly #maxSeries: number;
+	readonly #instruments = new InstrumentRegistry<
+		OtelCounter,
+		OtelGauge,
+		OtelHistogram
+	>();
+	readonly #dropped: OtelCounter;
 
 	constructor(options: OtelDriverOptions) {
 		this.#meter = options.meter;
+		this.#maxSeries = options.maxSeries ?? DEFAULT_MAX_SERIES;
+		// The same counter the Prometheus driver renders, labelled by metric
+		// NAME — bounded by code, never by a request.
+		const declaration = declareInstrument({
+			name: DROPPED_METRIC,
+			help: DROPPED_HELP,
+			labelNames: ["metric"],
+		});
+		this.#dropped = this.#instruments.counter(
+			declaration,
+			() =>
+				new OtelCounter(
+					declaration.name,
+					this.#meter.createCounter(
+						declaration.name,
+						instrumentOptions(declaration),
+					),
+					new SeriesGate(declaration, Number.MAX_SAFE_INTEGER, () => {}),
+				),
+		);
+	}
+
+	#onDropped = (metric: string): void => {
+		this.#dropped.increment(1, { metric });
+	};
+
+	#gate(declaration: Declaration): SeriesGate {
+		return new SeriesGate(declaration, this.#maxSeries, this.#onDropped);
 	}
 
 	createCounter(options: InstrumentOptions): Counter {
-		const existing = this.#counters.get(options.name);
-		if (existing) return existing;
-		const created = new OtelCounter(
-			this.#meter.createCounter(options.name, { description: options.help }),
+		const declaration = declareInstrument(options);
+		return this.#instruments.counter(
+			declaration,
+			() =>
+				new OtelCounter(
+					declaration.name,
+					this.#meter.createCounter(
+						declaration.name,
+						instrumentOptions(declaration),
+					),
+					this.#gate(declaration),
+				),
 		);
-		this.#counters.set(options.name, created);
-		return created;
 	}
 
 	createGauge(options: InstrumentOptions): Gauge {
-		const existing = this.#gauges.get(options.name);
-		if (existing) return existing;
-		const created = new OtelGauge(
-			this.#meter.createGauge(options.name, { description: options.help }),
+		const declaration = declareInstrument(options);
+		return this.#instruments.gauge(
+			declaration,
+			() =>
+				new OtelGauge(
+					declaration.name,
+					this.#meter.createGauge(
+						declaration.name,
+						instrumentOptions(declaration),
+					),
+					this.#gate(declaration),
+				),
 		);
-		this.#gauges.set(options.name, created);
-		return created;
 	}
 
 	createHistogram(options: HistogramOptions): Histogram {
-		const existing = this.#histograms.get(options.name);
-		if (existing) return existing;
+		const declaration = declareInstrument(options);
 		const buckets = histogramBuckets(
-			options.name,
-			options.labelNames ?? [],
+			declaration.name,
+			declaration.labelNames,
 			options.buckets,
 		);
-		const created = new OtelHistogram(
-			this.#meter.createHistogram(options.name, {
-				description: options.help,
-				// Seconds, matching the contract's own unit — an exporter that
-				// renames the series relies on this being declared.
-				unit: "s",
-				...(options.buckets
-					? { advice: { explicitBucketBoundaries: buckets } }
-					: {}),
-			}),
+		// Seconds only where the contract's own default applies: the default
+		// buckets are a latency ladder. A histogram with its own buckets states
+		// its own unit — `payload_bytes` exported as seconds would be renamed
+		// `_seconds` by an OTel-to-Prometheus exporter.
+		const unit =
+			declaration.unit ?? (options.buckets === undefined ? "s" : undefined);
+		return this.#instruments.histogram(
+			declaration,
+			() =>
+				new OtelHistogram(
+					declaration.name,
+					this.#meter.createHistogram(declaration.name, {
+						...instrumentOptions({ ...declaration, unit }),
+						// No `advice` without declared buckets, so the collector's
+						// configured view decides — imposing parsec's web-latency
+						// ladder on an OTel pipeline would override a choice the
+						// deployment already made.
+						...(options.buckets === undefined
+							? {}
+							: { advice: { explicitBucketBoundaries: buckets } }),
+					}),
+					this.#gate(declaration),
+				),
 		);
-		this.#histograms.set(options.name, created);
-		return created;
 	}
 
 	/** OTel pushes; there is nothing to scrape. */

@@ -19,7 +19,9 @@ const LABEL_NAME = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
 /** Validate a metric name, at declaration time. */
 export function assertMetricName(name: string): void {
-	if (!METRIC_NAME.test(name)) {
+	// The type check first: `RegExp.test(undefined)` tests the string
+	// "undefined", which is a perfectly valid name.
+	if (typeof name !== "string" || !METRIC_NAME.test(name)) {
 		throw new InvalidMetricNameError(
 			"metric",
 			name,
@@ -30,7 +32,7 @@ export function assertMetricName(name: string): void {
 
 /** Validate a label name, at declaration time. */
 export function assertLabelName(name: string): void {
-	if (!LABEL_NAME.test(name)) {
+	if (typeof name !== "string" || !LABEL_NAME.test(name)) {
 		throw new InvalidMetricNameError(
 			"label",
 			name,
