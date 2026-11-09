@@ -98,6 +98,19 @@ function matches(expected: string, given: string): boolean {
 	return timingSafeEqual(a, b);
 }
 
+/**
+ * The credentials of a `Bearer` Authorization header, or "" for anything else.
+ *
+ * The scheme is a case-insensitive token followed by one or more spaces
+ * (RFC 9110 §11.1, RFC 6750 §2.1). A scraper or proxy that writes `bearer`
+ * must not get the 404 that is indistinguishable from "no endpoint here".
+ */
+const BEARER = /^bearer +(\S+)$/i;
+
+function bearerCredentials(header: string | undefined): string {
+	return BEARER.exec(header ?? "")?.[1] ?? "";
+}
+
 export function metricsHandler(
 	metrics: MetricsManager,
 	options: MetricsEndpointOptions = {},
@@ -105,11 +118,7 @@ export function metricsHandler(
 	const token = resolveToken(options);
 	return async (ctx: MetricsEndpointContext): Promise<void> => {
 		if (token !== null) {
-			const header = ctx.request.header("authorization") ?? "";
-			const prefix = "Bearer ";
-			const given = header.startsWith(prefix)
-				? header.slice(prefix.length)
-				: "";
+			const given = bearerCredentials(ctx.request.header("authorization"));
 			if (!matches(token, given)) {
 				// 404, not 401. A 401 confirms the endpoint is there and invites
 				// the next request; an unauthenticated caller has no business

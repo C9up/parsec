@@ -157,4 +157,37 @@ describe("metricsHandler", () => {
 		expect(sent.status).toBe(404);
 		expect(sent.body).toBe("");
 	});
+
+	it("matches the Bearer scheme case-insensitively, with any run of spaces", async () => {
+		// RFC 9110 §11.1: the auth scheme is a case-insensitive token.
+		for (const header of [
+			"Bearer secret",
+			"bearer secret",
+			"BEARER secret",
+			"bEaReR secret",
+			"Bearer  secret",
+			"Bearer   secret",
+		]) {
+			const { ctx, sent } = context(header);
+			await metricsHandler(withOrders(), { token: "secret" })(ctx);
+			expect(sent.status, header).toBe(200);
+		}
+	});
+
+	it("still refuses another scheme, a glued scheme, or extra credentials", async () => {
+		for (const header of [
+			"Basic secret",
+			"Bearersecret",
+			"Bearer",
+			"Bearer ",
+			"Bearer secret extra",
+			"Bearer\tsecret",
+			"secret",
+			"Token secret",
+		]) {
+			const { ctx, sent } = context(header);
+			await metricsHandler(withOrders(), { token: "secret" })(ctx);
+			expect(sent.status, header).toBe(404);
+		}
+	});
 });
