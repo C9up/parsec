@@ -12,8 +12,14 @@ import {
 	assertMetricName,
 	formatMetadata,
 	formatSample,
+	formatValue,
 } from "../exposition.js";
-import { assertHelp, normaliseLabels, seriesKey } from "../instrument.js";
+import {
+	assertHelp,
+	histogramBuckets,
+	normaliseLabels,
+	seriesKey,
+} from "../instrument.js";
 import type {
 	Counter,
 	DriverOptions,
@@ -24,11 +30,6 @@ import type {
 	Labels,
 	MetricsDriver,
 } from "../types.js";
-
-/** The Prometheus convention: seconds, with a ladder that straddles a web request. */
-const DEFAULT_BUCKETS = [
-	0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10,
-] as const;
 
 const DEFAULT_MAX_SERIES = 1_000;
 
@@ -181,13 +182,11 @@ class PromHistogram extends Instrument implements Histogram {
 		onDropped: (metric: string) => void,
 	) {
 		super(options, maxSeries, onDropped);
-		const sorted = [...(options.buckets ?? DEFAULT_BUCKETS)].sort(
-			(a, b) => a - b,
+		this.#buckets = histogramBuckets(
+			options.name,
+			this.labelNames,
+			options.buckets,
 		);
-		// A duplicate bound renders two `le` lines with the same value, which
-		// makes the histogram non-monotonic and every quantile derived from it
-		// wrong.
-		this.#buckets = [...new Set(sorted)];
 	}
 
 	observe(value: number, labels?: Labels): void {
@@ -236,16 +235,16 @@ class PromHistogram extends Instrument implements Histogram {
 		const lines = [formatMetadata(this.name, "histogram", this.help)];
 		for (const series of this.#series.values()) {
 			let cumulative = 0;
-			for (let i = 0; i < this.#buckets.length; i++) {
+			this.#buckets.forEach((bound, i) => {
 				cumulative += series.counts[i] ?? 0;
 				lines.push(
 					formatSample(
 						`${this.name}_bucket`,
-						{ ...series.labels, le: String(this.#buckets[i]) },
+						{ ...series.labels, le: formatValue(bound) },
 						cumulative,
 					),
 				);
-			}
+			});
 			// The +Inf bucket is mandatory and equals the total count — an
 			// observation above every bound lands only here.
 			lines.push(

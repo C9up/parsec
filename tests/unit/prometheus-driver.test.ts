@@ -338,4 +338,62 @@ describe("PrometheusDriver", () => {
 			'parsec_series_dropped_total{metric="c_total"} 1',
 		);
 	});
+
+	it("refuses a histogram label named le, which the bucket lines own", () => {
+		// Accepted, it vanished from every bucket line and stayed on _sum and
+		// _count: one series rendered with two different label sets.
+		const driver = new PrometheusDriver();
+		expect(() =>
+			driver.createHistogram({ name: "h", help: "h", labelNames: ["le"] }),
+		).toThrow(expect.objectContaining({ code: "E_PARSEC_INVALID_NAME" }));
+		// le is only reserved where buckets are rendered.
+		driver
+			.createCounter({ name: "c_total", help: "c", labelNames: ["le"] })
+			.increment(1, { le: "x" });
+		expect(driver.scrape()).toContain('c_total{le="x"} 1');
+	});
+
+	it("refuses NaN and -Infinity bucket bounds at declaration", () => {
+		const driver = new PrometheusDriver();
+		for (const bound of [Number.NaN, Number.NEGATIVE_INFINITY]) {
+			expect(() =>
+				driver.createHistogram({ name: "h", help: "h", buckets: [1, bound] }),
+			).toThrow(
+				expect.objectContaining({ code: "E_PARSEC_INVALID_INSTRUMENT" }),
+			);
+		}
+		const notNumbers: unknown[] = ["1", null, undefined];
+		for (const bound of notNumbers) {
+			const options: Record<string, unknown> = {
+				name: "h",
+				help: "h",
+				buckets: [1, bound],
+			};
+			expect(() =>
+				Reflect.apply(driver.createHistogram, driver, [options]),
+			).toThrow(
+				expect.objectContaining({ code: "E_PARSEC_INVALID_INSTRUMENT" }),
+			);
+		}
+	});
+
+	it("folds a +Infinity bound into the mandatory +Inf bucket instead of rendering it twice", () => {
+		const driver = new PrometheusDriver();
+		const histogram = driver.createHistogram({
+			name: "h",
+			help: "h",
+			buckets: [1, Number.POSITIVE_INFINITY, 0.5],
+		});
+		histogram.observe(0.7);
+		histogram.observe(3);
+		const buckets = driver
+			.scrape()
+			.split("\n")
+			.filter((line) => line.startsWith("h_bucket"));
+		expect(buckets).toEqual([
+			'h_bucket{le="0.5"} 0',
+			'h_bucket{le="1"} 1',
+			'h_bucket{le="+Inf"} 2',
+		]);
+	});
 });

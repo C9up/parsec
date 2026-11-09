@@ -12,6 +12,7 @@
  *   drivers.otel({ meter: metrics.getMeter("my-app") })
  */
 
+import { histogramBuckets } from "../instrument.js";
 import type {
 	Counter,
 	Gauge,
@@ -157,6 +158,11 @@ export class OtelDriver implements MetricsDriver {
 	createHistogram(options: HistogramOptions): Histogram {
 		const existing = this.#histograms.get(options.name);
 		if (existing) return existing;
+		const buckets = histogramBuckets(
+			options.name,
+			options.labelNames ?? [],
+			options.buckets,
+		);
 		const created = new OtelHistogram(
 			this.#meter.createHistogram(options.name, {
 				description: options.help,
@@ -164,7 +170,7 @@ export class OtelDriver implements MetricsDriver {
 				// renames the series relies on this being declared.
 				unit: "s",
 				...(options.buckets
-					? { advice: { explicitBucketBoundaries: [...options.buckets] } }
+					? { advice: { explicitBucketBoundaries: buckets } }
 					: {}),
 			}),
 		);

@@ -146,4 +146,23 @@ describe("OtelDriver", () => {
 			driver.createHistogram({ name: "h", help: "h" }),
 		);
 	});
+
+	it("validates histogram buckets and the reserved le label like the Prometheus driver", () => {
+		const { meter: m, created } = meter();
+		const driver = new OtelDriver({ meter: m });
+		expect(() =>
+			driver.createHistogram({ name: "h", help: "h", labelNames: ["le"] }),
+		).toThrow(expect.objectContaining({ code: "E_PARSEC_INVALID_NAME" }));
+		expect(() =>
+			driver.createHistogram({ name: "h2", help: "h", buckets: [Number.NaN] }),
+		).toThrow(expect.objectContaining({ code: "E_PARSEC_INVALID_INSTRUMENT" }));
+		driver.createHistogram({
+			name: "h3",
+			help: "h",
+			buckets: [2, Number.POSITIVE_INFINITY, 1, 2],
+		});
+		expect(created.histogram).toMatchObject({
+			advice: { explicitBucketBoundaries: [1, 2] },
+		});
+	});
 });

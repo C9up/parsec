@@ -9,6 +9,7 @@
 import {
 	InvalidInstrumentError,
 	InvalidLabelValueError,
+	InvalidMetricNameError,
 	UndeclaredLabelError,
 } from "./errors.js";
 import type { Labels } from "./types.js";
@@ -76,4 +77,52 @@ export function seriesKey(
 	labels: Readonly<Record<string, string>>,
 ): string {
 	return JSON.stringify(labelNames.map((name) => labels[name] ?? ""));
+}
+
+/** The Prometheus convention: seconds, with a ladder that straddles a web request. */
+export const DEFAULT_BUCKETS: readonly number[] = [
+	0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10,
+];
+
+/**
+ * Validate a histogram's declaration and return its bucket bounds: finite,
+ * ascending, without duplicates.
+ *
+ * `le` is the bucket label (prom-client refuses it the same way); a user
+ * label of that name disappears from every bucket line and stays on _sum and
+ * _count. A `+Infinity` bound is the mandatory +Inf bucket every histogram
+ * already has, so it is folded into it rather than rendered twice. NaN and
+ * `-Infinity` have no meaning as an upper bound and are refused.
+ */
+export function histogramBuckets(
+	metric: string,
+	labelNames: readonly string[],
+	buckets: readonly number[] | undefined,
+): number[] {
+	if (labelNames.includes("le")) {
+		throw new InvalidMetricNameError(
+			"label",
+			"le",
+			"it is reserved for histogram buckets",
+		);
+	}
+	const given = buckets ?? DEFAULT_BUCKETS;
+	if (!Array.isArray(given)) {
+		throw new InvalidInstrumentError(metric, "buckets must be an array");
+	}
+	const finite: number[] = [];
+	for (const bound of given) {
+		if (bound === Number.POSITIVE_INFINITY) continue;
+		if (typeof bound !== "number" || !Number.isFinite(bound)) {
+			throw new InvalidInstrumentError(
+				metric,
+				`bucket bound ${String(bound)} is not a finite number`,
+			);
+		}
+		finite.push(bound);
+	}
+	// A duplicate bound renders two `le` lines with the same value, which
+	// makes the histogram non-monotonic and every quantile derived from it
+	// wrong.
+	return [...new Set(finite)].sort((a, b) => a - b);
 }
