@@ -37,7 +37,15 @@ export interface ReamContext {
 	 * the URL: see {@link routeLabel}.
 	 */
 	route?: { pattern?: string };
-	response: { getStatus(): number };
+	response: {
+		getStatus(): number;
+		/**
+		 * Run a callback once the response is final. ream runs these after the
+		 * exception handler on the error path too, which is the only point where
+		 * a failed request's status is known.
+		 */
+		onFinish?(callback: (error: Error | null) => void): void;
+	};
 }
 
 type ReamNext = () => Promise<void> | void;
@@ -123,6 +131,20 @@ export function instrumentsFor(metrics: MetricsManager): Instruments {
 	return instruments;
 }
 
+/**
+ * The status a request that threw will end with, for a host that offers no
+ * finish hook: the error's own HTTP status when it carries one, 500 otherwise.
+ */
+export function statusOfError(error: unknown): number {
+	if (typeof error === "object" && error !== null) {
+		const status = Reflect.get(error, "status");
+		if (Number.isInteger(status) && status >= 400 && status <= 599) {
+			return status;
+		}
+	}
+	return 500;
+}
+
 export async function parsecHttpMiddleware(
 	ctx: ReamContext,
 	next: ReamNext,
@@ -137,22 +159,38 @@ export async function parsecHttpMiddleware(
 	const method = methodLabel(ctx.request.method());
 	const started = process.hrtime.bigint();
 
-	inFlight.increment(1, { method });
-	try {
-		await next();
-	} finally {
-		// In the `finally`, so a handler that threw is still counted. Its
-		// status is whatever the error handler set by the time the stack
-		// unwinds — dropping those requests is how an error rate stays at zero
-		// through an outage.
-		inFlight.decrement(1, { method });
+	const record = (status: number): void => {
 		const labels: Labels = {
 			method,
 			route: routeLabel(ctx),
-			status: String(ctx.response.getStatus()),
+			status: String(status),
 		};
 		total.increment(1, labels);
 		duration.observe(Number(process.hrtime.bigint() - started) / 1e9, labels);
+	};
+
+	// A server middleware unwinds BEFORE the exception handler runs: ream
+	// handles the error outside the whole chain. Reading the status in a
+	// `finally` here would see the untouched default 200 for every request
+	// that threw, and the error rate would read zero through an outage. So
+	// the recording waits for the finished response when the host can say
+	// when that is.
+	const onFinish = ctx.response.onFinish;
+	if (typeof onFinish === "function") {
+		onFinish.call(ctx.response, () => record(ctx.response.getStatus()));
+	}
+
+	inFlight.increment(1, { method });
+	try {
+		await next();
+		if (typeof onFinish !== "function") record(ctx.response.getStatus());
+	} catch (error) {
+		// Still counted: dropping failed requests is how an error rate stays at
+		// zero through an outage.
+		if (typeof onFinish !== "function") record(statusOfError(error));
+		throw error;
+	} finally {
+		inFlight.decrement(1, { method });
 	}
 }
 

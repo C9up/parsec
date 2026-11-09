@@ -5,6 +5,7 @@ import ParsecHttpMiddleware, {
 	parsecHttpMiddleware,
 	type ReamContext,
 	routeLabel,
+	statusOfError,
 } from "../../src/http.js";
 import { drivers, MetricsManager } from "../../src/MetricsManager.js";
 
@@ -84,6 +85,63 @@ describe("http middleware", () => {
 		const body = await metrics.scrape();
 		expect(body).toContain('status="500"');
 		expect(body).toContain("http_server_request_duration_seconds_count");
+	});
+
+	it("derives a thrown request's status from the error when the host has no finish hook", async () => {
+		// The fake response still says 200: that is what ream's response reads
+		// while the exception handler has not run yet.
+		const metrics = manager();
+		const forbidden = Object.assign(new Error("nope"), { status: 403 });
+		await expect(
+			parsecHttpMiddleware(context(metrics, { pattern: "/x" }), () => {
+				throw forbidden;
+			}),
+		).rejects.toBe(forbidden);
+		const body = await metrics.scrape();
+		expect(body).toContain(
+			'http_server_requests_total{method="GET",route="/x",status="403"} 1',
+		);
+		expect(body).not.toContain('status="200"');
+	});
+
+	it("only trusts an error status that is an HTTP error code", () => {
+		expect(statusOfError(new Error("x"))).toBe(500);
+		expect(statusOfError({ status: 404 })).toBe(404);
+		expect(statusOfError({ status: 599 })).toBe(599);
+		expect(statusOfError({ status: 200 })).toBe(500);
+		expect(statusOfError({ status: 302 })).toBe(500);
+		expect(statusOfError({ status: 600 })).toBe(500);
+		expect(statusOfError({ status: "403" })).toBe(500);
+		expect(statusOfError({ status: 403.5 })).toBe(500);
+		expect(statusOfError("boom")).toBe(500);
+		expect(statusOfError(null)).toBe(500);
+	});
+
+	it("records at finish, with the final status, when the host offers onFinish", async () => {
+		const metrics = manager();
+		const finish: Array<(error: Error | null) => void> = [];
+		let status = 200;
+		const ctx: ReamContext = {
+			...context(metrics, { pattern: "/x" }),
+			response: {
+				getStatus: () => status,
+				onFinish: (callback) => {
+					finish.push(callback);
+				},
+			},
+		};
+		await expect(
+			parsecHttpMiddleware(ctx, () => {
+				throw new Error("boom");
+			}),
+		).rejects.toThrow("boom");
+		// Nothing yet: the exception handler has not decided the status.
+		expect(await metrics.scrape()).not.toContain("http_server_requests_total{");
+		status = 503;
+		for (const callback of finish) callback(null);
+		expect(await metrics.scrape()).toContain(
+			'http_server_requests_total{method="GET",route="/x",status="503"} 1',
+		);
 	});
 
 	it("brings in-flight back to zero, including after a failure", async () => {
