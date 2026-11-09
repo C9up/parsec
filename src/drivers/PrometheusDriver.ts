@@ -6,17 +6,14 @@
  * shut down.
  */
 
-import {
-	InstrumentConflictError,
-	InvalidMeasurementError,
-	UndeclaredLabelError,
-} from "../errors.js";
+import { InstrumentConflictError, InvalidMeasurementError } from "../errors.js";
 import {
 	assertLabelName,
 	assertMetricName,
 	formatMetadata,
 	formatSample,
 } from "../exposition.js";
+import { assertHelp, normaliseLabels } from "../instrument.js";
 import type {
 	Counter,
 	DriverOptions,
@@ -78,6 +75,7 @@ abstract class Instrument {
 		onDropped: (metric: string) => void,
 	) {
 		assertMetricName(options.name);
+		assertHelp(options.name, options.help);
 		for (const label of options.labelNames ?? []) assertLabelName(label);
 		this.name = options.name;
 		this.help = options.help;
@@ -86,26 +84,9 @@ abstract class Instrument {
 		this.#onDropped = onDropped;
 	}
 
-	/**
-	 * Normalise a caller's labels to the declared shape.
-	 *
-	 * An undeclared label RAISES rather than being dropped: it is almost
-	 * always the request-derived value that would have made this instrument
-	 * unbounded, and silently ignoring it hides the bug until the chart is
-	 * missing a dimension nobody can explain.
-	 */
+	/** Every declared label present, each value a string; see {@link normaliseLabels}. */
 	protected normalise(labels: Labels | undefined): Record<string, string> {
-		const out: Record<string, string> = {};
-		for (const name of this.labelNames) out[name] = "";
-		if (labels) {
-			for (const [key, value] of Object.entries(labels)) {
-				if (!this.labelNames.includes(key)) {
-					throw new UndeclaredLabelError(this.name, key, this.labelNames);
-				}
-				out[key] = value;
-			}
-		}
-		return out;
+		return normaliseLabels(this.name, this.labelNames, labels);
 	}
 
 	protected assertFinite(value: number): void {

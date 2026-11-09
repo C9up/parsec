@@ -17,10 +17,12 @@
 /**
  * Label values attached to a measurement.
  *
- * Values are strings because that is what both backends store. A number left
- * as a number would be stringified somewhere later, differently per driver.
+ * Strings or finite numbers, as in prom-client. A number is stringified once,
+ * by the shared contract, before any driver sees it — so `{ status: 200 }`
+ * and `{ status: "200" }` are one series on every backend. Anything else is
+ * refused at the call.
  */
-export type Labels = Readonly<Record<string, string>>;
+export type Labels = Readonly<Record<string, string | number>>;
 
 /** A value that only ever goes up. Requests served, errors, bytes written. */
 export interface Counter {
@@ -51,7 +53,7 @@ export interface Histogram {
 export interface InstrumentOptions {
 	/** Metric name. Prometheus-shaped: `[a-zA-Z_:][a-zA-Z0-9_:]*`. */
 	name: string;
-	/** One line saying what it measures, rendered as HELP. */
+	/** One line saying what it measures, rendered as HELP. Must be a string. */
 	help: string;
 	/**
 	 * The label names this instrument may carry, declared up front.

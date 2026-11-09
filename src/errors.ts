@@ -41,6 +41,32 @@ export class InvalidMeasurementError extends ParsecError {
 	}
 }
 
+/**
+ * Raised at declaration for an instrument whose options cannot be rendered
+ * or exported: a missing help, unusable bucket bounds.
+ */
+export class InvalidInstrumentError extends ParsecError {
+	constructor(metric: string, reason: string) {
+		super("E_PARSEC_INVALID_INSTRUMENT", `Parsec: "${metric}" — ${reason}`);
+	}
+}
+
+/**
+ * Raised when a label value is not a string or a finite number.
+ *
+ * At the call, deliberately: stored, it would only fail when rendered, and
+ * then on every later scrape.
+ */
+export class InvalidLabelValueError extends ParsecError {
+	constructor(metric: string, label: string, value: unknown) {
+		const shown = typeof value === "symbol" ? "a symbol" : typeof value;
+		super(
+			"E_PARSEC_INVALID_LABEL_VALUE",
+			`Parsec: "${metric}" was given ${shown === "number" ? String(value) : shown} for the label "${label}"; a label value must be a string or a finite number`,
+		);
+	}
+}
+
 /** Raised when an instrument is given a label it never declared. */
 export class UndeclaredLabelError extends ParsecError {
 	constructor(metric: string, label: string, declared: readonly string[]) {

@@ -3,6 +3,7 @@ import { PrometheusDriver } from "../../src/drivers/PrometheusDriver.js";
 import {
 	InstrumentConflictError,
 	InvalidMeasurementError,
+	ParsecError,
 	UndeclaredLabelError,
 } from "../../src/errors.js";
 
@@ -206,5 +207,86 @@ describe("PrometheusDriver", () => {
 		// Dropping failed calls is how a latency chart stays flat through an
 		// incident.
 		expect(driver.scrape()).toContain("d_seconds_count 1");
+	});
+
+	it("renders a numeric label value as its string, like prom-client", () => {
+		const driver = new PrometheusDriver();
+		const counter = driver.createCounter({
+			name: "responses_total",
+			help: "r",
+			labelNames: ["status"],
+		});
+		counter.increment(1, { status: 200 });
+		counter.increment(1, { status: "200" });
+		expect(driver.scrape()).toContain('responses_total{status="200"} 2');
+	});
+
+	it("refuses a label value that is not a string or a number at the call, and keeps the scrape alive", () => {
+		// The failure used to surface at render time, on every later scrape,
+		// taking every other metric of the process down with it.
+		const driver = new PrometheusDriver();
+		driver.createCounter({ name: "good_total", help: "g" }).increment();
+		const bad = driver.createCounter({
+			name: "bad_total",
+			help: "b",
+			labelNames: ["status"],
+		});
+		const values: unknown[] = [
+			undefined,
+			null,
+			{},
+			[],
+			Symbol("s"),
+			() => "x",
+			Number.NaN,
+			Number.POSITIVE_INFINITY,
+			10n,
+		];
+		for (const value of values) {
+			const labels: Record<string, unknown> = { status: value };
+			expect(() => Reflect.apply(bad.increment, bad, [1, labels])).toThrow(
+				expect.objectContaining({ code: "E_PARSEC_INVALID_LABEL_VALUE" }),
+			);
+		}
+		const body = driver.scrape();
+		expect(body).toContain("good_total 1");
+		expect(body).not.toContain("bad_total{");
+	});
+
+	it("refuses the same bad label value on gauges and histograms", () => {
+		const driver = new PrometheusDriver();
+		const gauge = driver.createGauge({
+			name: "g",
+			help: "g",
+			labelNames: ["k"],
+		});
+		const histogram = driver.createHistogram({
+			name: "h",
+			help: "h",
+			labelNames: ["k"],
+		});
+		const labels: Record<string, unknown> = { k: undefined };
+		expect(() => Reflect.apply(gauge.set, gauge, [1, labels])).toThrow(
+			ParsecError,
+		);
+		expect(() =>
+			Reflect.apply(histogram.observe, histogram, [1, labels]),
+		).toThrow(ParsecError);
+		expect(driver.scrape()).toBe("");
+	});
+
+	it("refuses an instrument declared without a string help at declaration", () => {
+		const driver = new PrometheusDriver();
+		for (const help of [undefined, 42, null]) {
+			const options: Record<string, unknown> = { name: "x_total", help };
+			expect(() =>
+				Reflect.apply(driver.createCounter, driver, [options]),
+			).toThrow(
+				expect.objectContaining({ code: "E_PARSEC_INVALID_INSTRUMENT" }),
+			);
+		}
+		// Nothing half-registered: the scrape still renders.
+		driver.createCounter({ name: "ok_total", help: "o" }).increment();
+		expect(driver.scrape()).toContain("ok_total 1");
 	});
 });

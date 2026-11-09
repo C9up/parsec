@@ -32,6 +32,8 @@ export {
 export {
 	EmptyTokenError,
 	InstrumentConflictError,
+	InvalidInstrumentError,
+	InvalidLabelValueError,
 	InvalidMeasurementError,
 	InvalidMetricNameError,
 	ParsecError,
