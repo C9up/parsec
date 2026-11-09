@@ -1,12 +1,18 @@
 /**
  * Instrument contracts.
  *
- * There is no upstream to mirror: AdonisJS publishes no metrics or telemetry
- * package (verified against the org's published list — application, bouncer,
- * cache, config, core, cors, encryption, health, i18n, lock, logger, presets,
- * redis, repl, session, static, tsconfig, vite). So this is judged on its own
- * merits, and shaped like the rest of the cohort: a driver contract with
- * pluggable backends, the way echo, bay and eclipse are.
+ * The upstream closest to this is @adonisjs/otel (1.2.4): an OpenTelemetry
+ * bootstrap — NodeSDK started before the app, OTLP destinations for traces,
+ * metrics and logs, a router middleware naming spans after the route, an
+ * exception hook and tracing helpers. It is a TRACING integration with no
+ * instrument API of its own and no scrape endpoint; its metrics come from
+ * the SDK's auto-instrumentation and leave by push. Parsec covers the
+ * metrics side only, shaped like prom-client (instruments, labels, a
+ * Prometheus exposition) and like the rest of the cohort (a driver contract
+ * with pluggable backends, as echo, bay and eclipse have). An application
+ * running the OpenTelemetry SDK hands its meter to the OTel driver. The
+ * tracing bootstrap itself has no ream equivalent yet: a known gap, not a
+ * parity claim.
  *
  * The three instrument types are the Prometheus/OpenTelemetry intersection.
  * Anything either can express beyond them (summaries, exemplars, exponential
