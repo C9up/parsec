@@ -13,7 +13,7 @@ import {
 	formatMetadata,
 	formatSample,
 } from "../exposition.js";
-import { assertHelp, normaliseLabels } from "../instrument.js";
+import { assertHelp, normaliseLabels, seriesKey } from "../instrument.js";
 import type {
 	Counter,
 	DriverOptions,
@@ -46,20 +46,6 @@ interface HistogramSeries {
 	counts: number[];
 	sum: number;
 	count: number;
-}
-
-/**
- * A stable key for one label combination.
- *
- * Built from the DECLARED order, not from the caller's object, so the same
- * combination written `{a, b}` and `{b, a}` lands on one series rather than
- * two that silently split a chart in half.
- */
-function keyOf(
-	labelNames: readonly string[],
-	labels: Record<string, string>,
-): string {
-	return labelNames.map((name) => labels[name] ?? "").join(" ");
 }
 
 abstract class Instrument {
@@ -123,7 +109,7 @@ class PromCounter extends Instrument implements Counter {
 		// scraper reads the drop as a process restart.
 		if (value < 0) throw new InvalidMeasurementError(this.name, value);
 		const normalised = this.normalise(labels);
-		const key = keyOf(this.labelNames, normalised);
+		const key = seriesKey(this.labelNames, normalised);
 		const existing = this.#series.get(key);
 		if (existing) {
 			existing.value += value;
@@ -148,7 +134,7 @@ class PromGauge extends Instrument implements Gauge {
 
 	#at(labels: Labels | undefined): Series | undefined {
 		const normalised = this.normalise(labels);
-		const key = keyOf(this.labelNames, normalised);
+		const key = seriesKey(this.labelNames, normalised);
 		const existing = this.#series.get(key);
 		if (existing) return existing;
 		if (!this.admits(this.#series.size)) return undefined;
@@ -207,7 +193,7 @@ class PromHistogram extends Instrument implements Histogram {
 	observe(value: number, labels?: Labels): void {
 		this.assertFinite(value);
 		const normalised = this.normalise(labels);
-		const key = keyOf(this.labelNames, normalised);
+		const key = seriesKey(this.labelNames, normalised);
 		let series = this.#series.get(key);
 		if (!series) {
 			if (!this.admits(this.#series.size)) return;

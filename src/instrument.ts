@@ -61,3 +61,19 @@ export function normaliseLabels(
 	}
 	return out;
 }
+
+/**
+ * A key for one label combination, injective over the values.
+ *
+ * Built from the DECLARED order, not from the caller's object, so `{a, b}`
+ * and `{b, a}` land on one series. JSON-encoded rather than joined with a
+ * separator: any separator can appear inside a value, and then two distinct
+ * label sets share one series — the second one's counts credited to the
+ * first, and a request-derived value able to absorb another set's traffic.
+ */
+export function seriesKey(
+	labelNames: readonly string[],
+	labels: Readonly<Record<string, string>>,
+): string {
+	return JSON.stringify(labelNames.map((name) => labels[name] ?? ""));
+}

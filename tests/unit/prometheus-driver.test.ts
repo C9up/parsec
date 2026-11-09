@@ -289,4 +289,53 @@ describe("PrometheusDriver", () => {
 		driver.createCounter({ name: "ok_total", help: "o" }).increment();
 		expect(driver.scrape()).toContain("ok_total 1");
 	});
+
+	it("keeps label sets apart whatever separator their values contain", () => {
+		// The key used to join values with a space: {a:"x y",b:"z"} and
+		// {a:"x",b:"y z"} landed on one series, the second credited to the first.
+		const driver = new PrometheusDriver();
+		const counter = driver.createCounter({
+			name: "c_total",
+			help: "c",
+			labelNames: ["a", "b"],
+		});
+		const pairs: Array<[string, string]> = [
+			["x y", "z"],
+			["x", "y z"],
+			["x,", "y"],
+			["x", ",y"],
+			["x:", "y"],
+			["x", ":y"],
+			["x\u0000", "y"],
+			["x", "\u0000y"],
+			['x"', "y"],
+			["x", '"y'],
+			["x\\", "y"],
+		];
+		pairs.forEach(([a, b], i) => {
+			counter.increment(i + 1, { a, b });
+		});
+		const lines = driver
+			.scrape()
+			.split("\n")
+			.filter((line) => line.startsWith("c_total{"));
+		expect(lines).toHaveLength(pairs.length);
+		expect(lines).toContain('c_total{a="x y",b="z"} 1');
+		expect(lines).toContain('c_total{a="x",b="y z"} 2');
+	});
+
+	it("counts the cap per distinct label set, not per colliding key", () => {
+		const driver = new PrometheusDriver({ maxSeries: 2 });
+		const counter = driver.createCounter({
+			name: "c_total",
+			help: "c",
+			labelNames: ["a", "b"],
+		});
+		counter.increment(1, { a: "x y", b: "z" });
+		counter.increment(1, { a: "x", b: "y z" });
+		counter.increment(1, { a: "q", b: "r" });
+		expect(driver.scrape()).toContain(
+			'parsec_series_dropped_total{metric="c_total"} 1',
+		);
+	});
 });
