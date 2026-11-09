@@ -5,7 +5,7 @@
  *   metrics.counter({ name: "orders_total", help: "Orders placed." }).increment()
  */
 
-import type { MetricsManager } from "../MetricsManager.js";
+import { MetricsManager } from "../MetricsManager.js";
 
 let instance: MetricsManager | undefined;
 
@@ -24,7 +24,15 @@ export function clearMetrics(): void {
 	instance = undefined;
 }
 
-const metrics: MetricsManager = new Proxy({} as MetricsManager, {
+/**
+ * What the proxy stands on. Never reached: every read goes through the trap
+ * below, to the bound manager or to the not-booted error. A real (noop)
+ * manager rather than an asserted `{}`, so the facade is a MetricsManager by
+ * type and by prototype.
+ */
+const placeholder = new MetricsManager();
+
+const metrics: MetricsManager = new Proxy(placeholder, {
 	get(_target, prop) {
 		// A module loader inspects what it imports before anyone uses it: it
 		// reads `then` to decide whether the namespace is thenable, and various
@@ -37,7 +45,7 @@ const metrics: MetricsManager = new Proxy({} as MetricsManager, {
 					"or `setMetrics(myManager)` was called. Wire one of them first.",
 			);
 		}
-		const value = Reflect.get(instance, prop);
+		const value = Reflect.get(instance, prop, instance);
 		return typeof value === "function" ? value.bind(instance) : value;
 	},
 });

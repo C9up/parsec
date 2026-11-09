@@ -127,6 +127,12 @@ describe("services/main", () => {
 		);
 	});
 
+	it("is a MetricsManager by prototype, so an instanceof check accepts the facade", () => {
+		// The middleware resolves the manager with `instanceof`; a facade over a
+		// bare object failed it even once a manager was bound.
+		expect(metrics instanceof MetricsManager).toBe(true);
+	});
+
 	it("forwards to the bound manager with methods still bound to it", async () => {
 		const manager = new MetricsManager({
 			default: "p",
