@@ -162,6 +162,42 @@ describe("MetricsManager", () => {
 		).toThrow(UnknownExporterError);
 	});
 
+	it("refuses an exporter name inherited from Object.prototype", () => {
+		// METRICS_EXPORTER=toString used to pass the constructor (the
+		// inherited function is truthy) and crash at the first instrument.
+		for (const name of [
+			"toString",
+			"constructor",
+			"hasOwnProperty",
+			"__proto__",
+			"valueOf",
+		]) {
+			expect(
+				() =>
+					new MetricsManager({
+						default: name,
+						exporters: { prometheus: drivers.prometheus() },
+					}),
+				name,
+			).toThrow(UnknownExporterError);
+		}
+		const metrics = new MetricsManager({
+			default: "prometheus",
+			exporters: { prometheus: drivers.prometheus() },
+		});
+		for (const name of ["constructor", "toString", "__proto__"]) {
+			expect(() => metrics.use(name), name).toThrow(UnknownExporterError);
+		}
+	});
+
+	it("refuses an exporter that is declared but is not a factory", () => {
+		const exporters: Record<string, unknown> = { p: "prometheus" };
+		const config: Record<string, unknown> = { default: "p", exporters };
+		expect(() => Reflect.construct(MetricsManager, [config])).toThrow(
+			UnknownExporterError,
+		);
+	});
+
 	it("names the declared exporters when one is missing", () => {
 		const metrics = new MetricsManager({
 			default: "p",

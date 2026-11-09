@@ -133,12 +133,26 @@ export class MetricsManager {
 			default: "noop",
 			exporters: { noop: drivers.noop() },
 		};
-		if (!this.#config.exporters[this.#config.default]) {
-			throw new UnknownExporterError(
-				this.#config.default,
-				Object.keys(this.#config.exporters),
-			);
+		this.#factory(this.#config.default);
+	}
+
+	/**
+	 * The factory declared under `name`, or UnknownExporterError.
+	 *
+	 * An OWN key only: the name comes from the environment
+	 * (METRICS_EXPORTER), and an indexed lookup would resolve `toString` or
+	 * `constructor` through Object.prototype to a function that is not a
+	 * driver factory at all.
+	 */
+	#factory(name: string): DriverFactory {
+		const exporters = this.#config.exporters;
+		const factory = Object.hasOwn(exporters, name)
+			? exporters[name]
+			: undefined;
+		if (typeof factory !== "function") {
+			throw new UnknownExporterError(name, Object.keys(exporters));
 		}
+		return factory;
 	}
 
 	/** Resolve an exporter by name (or the default). Built once, then reused. */
@@ -147,14 +161,7 @@ export class MetricsManager {
 		const existing = this.#built.get(exporter);
 		if (existing) return existing;
 
-		const factory = this.#config.exporters[exporter];
-		if (!factory) {
-			throw new UnknownExporterError(
-				exporter,
-				Object.keys(this.#config.exporters),
-			);
-		}
-		const built = new MetricsRecorder(factory());
+		const built = new MetricsRecorder(this.#factory(exporter)());
 		this.#built.set(exporter, built);
 		return built;
 	}
