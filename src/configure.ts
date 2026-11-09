@@ -6,6 +6,7 @@
  * together is what makes `ream add` mean installed AND working.
  */
 
+import { randomBytes } from "node:crypto";
 import { stubsRoot } from "./stubs.js";
 
 interface Codemods {
@@ -28,9 +29,13 @@ export async function configure(codemods: Codemods): Promise<void> {
 	// The config below reads these, so they are declared here. Writing the file
 	// without them leaves an application whose config asks the environment for
 	// something nothing ever put there.
+	//
+	// The token is generated, never left empty: the scrape route refuses to
+	// build without one, and a placeholder a person must remember to fill in is
+	// how an endpoint ends up public. `.env` only — it is not committed.
 	await codemods.addEnvVars({
 		METRICS_EXPORTER: "prometheus",
-		METRICS_TOKEN: "",
+		METRICS_TOKEN: randomBytes(32).toString("base64url"),
 	});
 
 	await codemods.addProvider("@c9up/parsec/provider");

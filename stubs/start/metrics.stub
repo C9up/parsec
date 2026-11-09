@@ -7,10 +7,12 @@ import { metricsHandler } from '@c9up/parsec/endpoint'
 import env from '#start/env'
 
 /**
- * The scrape endpoint. Behind a bearer token by default — leaving
- * METRICS_TOKEN empty publishes your route table to anyone who asks.
+ * The scrape endpoint, behind a bearer token. The handler refuses to build
+ * with an empty or missing METRICS_TOKEN rather than serve your route table
+ * to anyone who asks; for a route only your own network can reach, replace
+ * the token with `public: true`.
  */
 router.get(
   '/__metrics',
-  metricsHandler(metrics, { token: env.get('METRICS_TOKEN') || undefined }),
+  metricsHandler(metrics, { token: env.get('METRICS_TOKEN') }),
 )

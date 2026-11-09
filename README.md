@@ -83,6 +83,11 @@ router.get("/__metrics", metricsHandler(metrics, { token: env.get("METRICS_TOKEN
 A wrong token gets a 404, not a 401 — a 401 confirms the endpoint is there and
 invites the next request. The comparison is constant-time.
 
+The handler refuses to build without a token, and with an empty one: an unset
+`METRICS_TOKEN` fails the boot instead of opening the endpoint. `ream configure`
+generates a random token into `.env`. For a route only your own network can
+reach, say so explicitly with `metricsHandler(metrics, { public: true })`.
+
 ## Cardinality
 
 The failure mode of a metrics system is not a wrong number, it is a process

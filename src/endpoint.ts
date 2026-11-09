@@ -11,10 +11,15 @@
  *   import metrics from "@c9up/parsec/services/main"
  *
  *   router.get("/__metrics", metricsHandler(metrics, { token: env.get("METRICS_TOKEN") }))
+ *
+ * Building the handler with neither a token nor `public: true` throws, and so
+ * does an empty token: an unset variable must fail the boot, not open the
+ * endpoint.
  */
 
 import { timingSafeEqual } from "node:crypto";
 import { PROMETHEUS_CONTENT_TYPE } from "./drivers/PrometheusDriver.js";
+import { EmptyTokenError, UnprotectedEndpointError } from "./errors.js";
 import type { MetricsManager } from "./MetricsManager.js";
 
 export interface MetricsEndpointContext {
@@ -26,16 +31,56 @@ export interface MetricsEndpointContext {
 	};
 }
 
+/**
+ * A secret wrapper such as the one `Env.schema.secret()` returns, read only
+ * through `release()` so it never reaches a log on its way here.
+ */
+export interface ReleasableSecret {
+	release(): string;
+}
+
 export interface MetricsEndpointOptions {
 	/**
-	 * Require `Authorization: Bearer <token>`.
-	 *
-	 * Optional because a deployment that reaches this route only from inside
-	 * its own network has already solved the problem. Set it for anything
-	 * else — and note that leaving it unset is the choice that publishes your
-	 * route table.
+	 * Require `Authorization: Bearer <token>`. A plain string or a secret
+	 * wrapper; empty or blank is refused.
 	 */
-	token?: string;
+	token?: string | ReleasableSecret | undefined;
+	/**
+	 * Serve the body to anyone who reaches the route, with no token.
+	 *
+	 * Only for a deployment where nothing outside its own network reaches this
+	 * route. It has to be said explicitly: leaving it out without a token is
+	 * an error, because that is the choice that publishes the route table.
+	 */
+	public?: boolean;
+}
+
+function releaseToken(token: string | ReleasableSecret): string {
+	return typeof token === "string" ? token : token.release();
+}
+
+/**
+ * The token the handler enforces, or `null` for a deliberately public one.
+ * Decided once, when the route is declared, so a misconfiguration stops the
+ * boot instead of surfacing on the first scrape.
+ */
+function resolveToken(options: MetricsEndpointOptions): string | null {
+	if (options.token !== undefined) {
+		if (options.public === true) {
+			throw new UnprotectedEndpointError(
+				"the metrics endpoint was given both a token and `public: true`; pick one.",
+			);
+		}
+		const token = releaseToken(options.token);
+		if (typeof token !== "string" || token.trim().length === 0) {
+			throw new EmptyTokenError();
+		}
+		return token;
+	}
+	if (options.public === true) return null;
+	throw new UnprotectedEndpointError(
+		"the metrics endpoint has no token. Pass `token` (METRICS_TOKEN), or `public: true` if only your own network reaches this route.",
+	);
 }
 
 /**
@@ -57,14 +102,15 @@ export function metricsHandler(
 	metrics: MetricsManager,
 	options: MetricsEndpointOptions = {},
 ) {
+	const token = resolveToken(options);
 	return async (ctx: MetricsEndpointContext): Promise<void> => {
-		if (options.token !== undefined) {
+		if (token !== null) {
 			const header = ctx.request.header("authorization") ?? "";
 			const prefix = "Bearer ";
 			const given = header.startsWith(prefix)
 				? header.slice(prefix.length)
 				: "";
-			if (!matches(options.token, given)) {
+			if (!matches(token, given)) {
 				// 404, not 401. A 401 confirms the endpoint is there and invites
 				// the next request; an unauthenticated caller has no business
 				// learning that this application exposes metrics at all.

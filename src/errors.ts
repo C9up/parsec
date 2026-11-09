@@ -70,3 +70,27 @@ export class UnknownExporterError extends ParsecError {
 		);
 	}
 }
+
+/**
+ * Raised when a scrape endpoint is built with neither a token nor an explicit
+ * `public: true`.
+ *
+ * A metrics body names every route, its traffic and its error rate. A token
+ * that was simply forgotten — an unset environment variable — must not be the
+ * thing that publishes it.
+ */
+export class UnprotectedEndpointError extends ParsecError {
+	constructor(detail: string) {
+		super("E_PARSEC_UNPROTECTED_ENDPOINT", `Parsec: ${detail}`);
+	}
+}
+
+/** Raised when a scrape endpoint is given an empty or blank token. */
+export class EmptyTokenError extends ParsecError {
+	constructor() {
+		super(
+			"E_PARSEC_EMPTY_TOKEN",
+			"Parsec: the metrics endpoint token is empty. An empty secret would match a request that sends no credentials; set METRICS_TOKEN or pass `public: true` deliberately.",
+		);
+	}
+}

@@ -79,4 +79,32 @@ describe("configure", () => {
 		expect(route).toContain("metricsHandler");
 		expect(route).toContain("METRICS_TOKEN");
 	});
+
+	it("seeds a random METRICS_TOKEN instead of an empty one", async () => {
+		// An empty token used to turn into "no token" in the generated route,
+		// publishing the scrape to anyone.
+		const first = codemods();
+		const second = codemods();
+		await configure(first);
+		await configure(second);
+		const tokenOf = (c: ReturnType<typeof codemods>): string => {
+			const vars: unknown = c.addEnvVars.mock.calls[0]?.[0];
+			const token =
+				typeof vars === "object" && vars !== null
+					? Reflect.get(vars, "METRICS_TOKEN")
+					: undefined;
+			return typeof token === "string" ? token : "";
+		};
+		// 32 random bytes, base64url: 43 characters, no padding.
+		expect(tokenOf(first)).toMatch(/^[A-Za-z0-9_-]{43}$/);
+		expect(tokenOf(first)).not.toBe(tokenOf(second));
+	});
+
+	it("passes the token to the handler as-is, so an empty one fails the boot", async () => {
+		const c = codemods();
+		await configure(c);
+		const route = c.written.get("start/metrics.ts") ?? "";
+		expect(route).toContain("token: env.get('METRICS_TOKEN')");
+		expect(route).not.toContain("|| undefined");
+	});
 });

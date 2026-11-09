@@ -27,14 +27,17 @@ export {
 	type MetricsEndpointContext,
 	type MetricsEndpointOptions,
 	metricsHandler,
+	type ReleasableSecret,
 } from "./endpoint.js";
 export {
+	EmptyTokenError,
 	InstrumentConflictError,
 	InvalidMeasurementError,
 	InvalidMetricNameError,
 	ParsecError,
 	UndeclaredLabelError,
 	UnknownExporterError,
+	UnprotectedEndpointError,
 } from "./errors.js";
 export {
 	defineConfig,
