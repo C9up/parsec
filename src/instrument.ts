@@ -15,7 +15,7 @@ import {
 	UndeclaredLabelError,
 } from "./errors.js";
 import { assertLabelName, assertMetricName } from "./exposition.js";
-import type { InstrumentOptions, Labels } from "./types.js";
+import type { EndTimer, InstrumentOptions, Labels } from "./types.js";
 
 /** A declaration that passed {@link declareInstrument}. */
 export interface Declaration {
@@ -166,6 +166,14 @@ export const DROPPED_METRIC = "parsec_series_dropped_total";
 export const DROPPED_HELP =
 	"Series refused because an instrument reached its cardinality cap.";
 
+/** Name of the built-in counter that reports a `collect` that threw or timed out. */
+export const COLLECT_FAILURES_METRIC = "parsec_collect_failures_total";
+export const COLLECT_FAILURES_HELP =
+	"Collect callbacks that threw or timed out during a scrape.";
+
+/** Milliseconds one `collect` may take during a scrape. */
+export const DEFAULT_COLLECT_TIMEOUT = 5_000;
+
 /** How many label combinations one instrument holds when nothing says otherwise. */
 export const DEFAULT_MAX_SERIES = 1_000;
 
@@ -298,4 +306,27 @@ export async function timed<T>(
 	} finally {
 		record(Number(process.hrtime.bigint() - started) / 1e9);
 	}
+}
+
+/** Validate a `collect` option at declaration. */
+export function assertCollect(metric: string, collect: unknown): void {
+	if (collect !== undefined && typeof collect !== "function") {
+		throw new InvalidInstrumentError(metric, "collect must be a function");
+	}
+}
+
+/**
+ * A timer that hands the elapsed SECONDS and the merged labels to `record`
+ * when it ends, and returns the seconds.
+ */
+export function startTimer(
+	labels: Labels | undefined,
+	record: (seconds: number, labels: Labels) => void,
+): EndTimer {
+	const started = process.hrtime.bigint();
+	return (endLabels) => {
+		const seconds = Number(process.hrtime.bigint() - started) / 1e9;
+		record(seconds, { ...labels, ...endLabels });
+		return seconds;
+	};
 }

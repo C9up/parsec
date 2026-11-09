@@ -24,21 +24,45 @@
  */
 export type Labels = Readonly<Record<string, string | number>>;
 
+/**
+ * What every instrument can do to its own series.
+ *
+ * A finished job, a disconnected tenant: a series nothing will update again
+ * would otherwise sit there until the process restarts, holding one of the
+ * instrument's `maxSeries` slots until legitimate new series start being
+ * dropped.
+ */
+export interface SeriesLifecycle {
+	/** Forget one label set. Removing one never recorded is not an error. */
+	remove(labels?: Labels): void;
+	/** Forget every label set of this instrument. */
+	reset(): void;
+}
+
+/**
+ * Ends a timer: records the elapsed SECONDS, with the start labels merged
+ * with these, and returns them.
+ */
+export type EndTimer = (labels?: Labels) => number;
+
 /** A value that only ever goes up. Requests served, errors, bytes written. */
-export interface Counter {
+export interface Counter extends SeriesLifecycle {
 	/** Add to the counter. `value` must be finite and non-negative. */
 	increment(value?: number, labels?: Labels): void;
 }
 
 /** A value that moves in both directions. Connections open, queue depth. */
-export interface Gauge {
+export interface Gauge extends SeriesLifecycle {
 	set(value: number, labels?: Labels): void;
 	increment(value?: number, labels?: Labels): void;
 	decrement(value?: number, labels?: Labels): void;
+	/** Start a timer whose end SETS the gauge to the elapsed seconds. */
+	startTimer(labels?: Labels): EndTimer;
 }
 
 /** A distribution of observations. Request duration, payload size. */
-export interface Histogram {
+export interface Histogram extends SeriesLifecycle {
+	/** Record one observation. `value` must be finite and non-negative. */
 	observe(value: number, labels?: Labels): void;
 	/**
 	 * Time `work`, record the elapsed SECONDS, and return its result.
@@ -48,7 +72,19 @@ export interface Histogram {
 	 * looking healthy during an incident.
 	 */
 	time<T>(work: () => Promise<T>, labels?: Labels): Promise<T>;
+	/** Start a timer whose end observes the elapsed seconds. */
+	startTimer(labels?: Labels): EndTimer;
 }
+
+/**
+ * Computes an instrument's values when they are read rather than when they
+ * change — a queue depth, a pool size, the process's CPU time.
+ *
+ * Runs before each scrape under Prometheus, and on each collection under
+ * OpenTelemetry (through an observable instrument). It receives the
+ * instrument and records through it as usual, labels included.
+ */
+export type Collect<T> = (instrument: T) => void | Promise<void>;
 
 export interface InstrumentOptions {
 	/** Metric name. Prometheus-shaped: `[a-zA-Z_:][a-zA-Z0-9_:]*`. */
@@ -70,6 +106,16 @@ export interface InstrumentOptions {
 	 * it in the name there (`_seconds`, `_bytes`).
 	 */
 	unit?: string;
+}
+
+export interface CounterOptions extends InstrumentOptions {
+	/** Add what happened since the last read, when it is read. */
+	collect?: Collect<Counter>;
+}
+
+export interface GaugeOptions extends InstrumentOptions {
+	/** Set the current value when it is read. */
+	collect?: Collect<Gauge>;
 }
 
 export interface HistogramOptions extends InstrumentOptions {
@@ -95,6 +141,14 @@ export interface DriverOptions {
 	 * instead of an outage. Default 1000.
 	 */
 	maxSeries?: number;
+	/**
+	 * How long one `collect` callback may take during a scrape, in
+	 * MILLISECONDS (a timer, not a measurement). Past it the instrument keeps
+	 * its previous values and the failure is counted in
+	 * `parsec_collect_failures_total`, rather than one stuck callback hanging
+	 * the whole scrape. Default 5000. Pushing drivers leave this to their SDK.
+	 */
+	collectTimeout?: number;
 }
 
 /**
@@ -105,8 +159,8 @@ export interface DriverOptions {
  * is the other half of the cardinality problem.
  */
 export interface MetricsDriver {
-	createCounter(options: InstrumentOptions): Counter;
-	createGauge(options: InstrumentOptions): Gauge;
+	createCounter(options: CounterOptions): Counter;
+	createGauge(options: GaugeOptions): Gauge;
 	createHistogram(options: HistogramOptions): Histogram;
 	/**
 	 * Render the current state in whatever format this driver exposes, or

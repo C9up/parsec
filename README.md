@@ -60,6 +60,28 @@ const duration = metrics.histogram({
 await duration.time(() => checkout(cart), { outcome: "paid" })
 ```
 
+Values that are read rather than pushed — a queue depth, a pool size — take a
+`collect` callback, run before each scrape (or on each OpenTelemetry
+collection). One that throws or hangs keeps its last values and is counted in
+`parsec_collect_failures_total`; the rest of the scrape is served as usual.
+
+```ts
+metrics.gauge({
+  name: "queue_depth",
+  help: "Jobs waiting.",
+  collect: async (gauge) => gauge.set(await queue.size()),
+})
+```
+
+`remove(labels)` and `reset()` drop series nothing will update again (a
+finished job, a gone tenant) and free their slot under the cardinality cap.
+`startTimer()` on a histogram or a gauge returns an `end(labels?)` that records
+the elapsed seconds.
+
+`collectDefaultMetrics(metrics)` adds the process baseline — CPU, memory,
+event-loop lag, file descriptors, GC, Node version — under prom-client's names,
+so existing dashboards read it unchanged. It returns its stop.
+
 `metrics.use("otel")` records to a named exporter instead of the default —
 scrape *and* push, if that is what the deployment wants.
 

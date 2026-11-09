@@ -18,7 +18,9 @@
  * the application's own code is allowed to do.
  */
 
+import { InvalidInstrumentError } from "../errors.js";
 import {
+	assertCollect,
 	assertMeasurement,
 	DEFAULT_MAX_SERIES,
 	type Declaration,
@@ -29,15 +31,19 @@ import {
 	InstrumentRegistry,
 	normaliseLabels,
 	seriesKey,
+	startTimer,
 	timed,
 } from "../instrument.js";
 import type {
+	Collect,
 	Counter,
+	CounterOptions,
 	DriverOptions,
+	EndTimer,
 	Gauge,
+	GaugeOptions,
 	Histogram,
 	HistogramOptions,
-	InstrumentOptions,
 	Labels,
 	MetricsDriver,
 } from "../types.js";
@@ -52,6 +58,14 @@ interface OtelAdder {
 interface OtelRecorder {
 	record(value: number, attributes?: Attributes): void;
 }
+interface OtelObservableResult {
+	observe(value: number, attributes?: Attributes): void;
+}
+interface OtelObservable {
+	addCallback(
+		callback: (result: OtelObservableResult) => void | Promise<void>,
+	): void;
+}
 
 interface OtelInstrumentOptions {
 	description?: string;
@@ -61,10 +75,11 @@ interface OtelInstrumentOptions {
 /**
  * The slice of `@opentelemetry/api`'s Meter this needs.
  *
- * `createGauge` is the synchronous gauge, added in API 1.9. The observable
- * gauge is not usable here: the contract's `set()` is synchronous and
- * caller-driven, while an observable one is pulled by the SDK on its own
- * schedule.
+ * `createGauge` is the synchronous gauge, added in API 1.9: the contract's
+ * `set()` is synchronous and caller-driven. The observable instruments are
+ * used only for an instrument declared with `collect`, whose values are read
+ * when the SDK collects; they are optional here so a meter written for the
+ * synchronous path alone still fits.
  */
 export interface OtelMeter {
 	createCounter(name: string, options?: OtelInstrumentOptions): OtelAdder;
@@ -75,18 +90,32 @@ export interface OtelMeter {
 			advice?: { explicitBucketBoundaries?: number[] };
 		},
 	): OtelRecorder;
+	createObservableCounter?(
+		name: string,
+		options?: OtelInstrumentOptions,
+	): OtelObservable;
+	createObservableGauge?(
+		name: string,
+		options?: OtelInstrumentOptions,
+	): OtelObservable;
 }
 
 export interface OtelDriverOptions extends DriverOptions {
 	meter: OtelMeter;
 }
 
+/** One label set's value, kept for an instrument that reports on collection. */
+interface Point {
+	attributes: Attributes;
+	value: number;
+}
+
 /**
  * The cardinality cap, on parsec's side of the meter.
  *
- * The SDK has its own limit, but the gauge below keeps a value per label set
- * in parsec's memory, in front of it; and the contract promises the same cap
- * — and the same `parsec_series_dropped_total` — whichever driver is
+ * The SDK has its own limit, but a gauge keeps a value per label set in
+ * parsec's memory, in front of it; and the contract promises the same cap —
+ * and the same `parsec_series_dropped_total` — whichever driver is
  * configured. Only the keys are kept, never more than `maxSeries` of them.
  */
 class SeriesGate {
@@ -105,45 +134,103 @@ class SeriesGate {
 		this.#onDropped = onDropped;
 	}
 
-	/** The normalised attributes and their key, or `undefined` when refused. */
+	get name(): string {
+		return this.#declaration.name;
+	}
+
+	/** The normalised attributes and their key, validated. */
+	locate(labels: Labels | undefined): { key: string; attributes: Attributes } {
+		const { name, labelNames } = this.#declaration;
+		const attributes = normaliseLabels(name, labelNames, labels);
+		return { key: seriesKey(labelNames, attributes), attributes };
+	}
+
+	/** {@link locate}, or `undefined` when the label set is refused by the cap. */
 	admit(
 		labels: Labels | undefined,
 	): { key: string; attributes: Attributes } | undefined {
-		const { name, labelNames } = this.#declaration;
-		const attributes = normaliseLabels(name, labelNames, labels);
-		const key = seriesKey(labelNames, attributes);
-		if (this.#keys.has(key)) return { key, attributes };
+		const series = this.locate(labels);
+		if (this.#keys.has(series.key)) return series;
 		if (this.#keys.size >= this.#maxSeries) {
-			this.#onDropped(name);
+			this.#onDropped(this.#declaration.name);
 			return undefined;
 		}
-		this.#keys.add(key);
-		return { key, attributes };
+		this.#keys.add(series.key);
+		return series;
+	}
+
+	/** Release a label set's slot; returns its key. */
+	forget(labels: Labels | undefined): string {
+		const { key } = this.locate(labels);
+		this.#keys.delete(key);
+		return key;
+	}
+
+	clear(): void {
+		this.#keys.clear();
 	}
 }
 
-class OtelCounter implements Counter {
-	readonly #name: string;
-	readonly #instrument: OtelAdder;
-	readonly #gate: SeriesGate;
+/** Report every point to an observable callback's result. */
+function report(
+	points: Map<string, Point>,
+	result: OtelObservableResult,
+): void {
+	for (const point of points.values()) {
+		result.observe(point.value, point.attributes);
+	}
+}
 
-	constructor(name: string, instrument: OtelAdder, gate: SeriesGate) {
-		this.#name = name;
-		this.#instrument = instrument;
+/**
+ * On OpenTelemetry, `remove` and `reset` release parsec's own state — the
+ * cap slot, a gauge's last value, a collected instrument's points. A
+ * synchronous instrument's stream already aggregated by the SDK is the SDK's:
+ * the API offers no way to delete it.
+ */
+class OtelCounter implements Counter {
+	readonly #gate: SeriesGate;
+	/** `undefined` for the observable form, which reports {@link #totals}. */
+	readonly #sync: OtelAdder | undefined;
+	/** Running totals per admitted label set, for the observable form. */
+	readonly #totals = new Map<string, Point>();
+
+	constructor(gate: SeriesGate, sync: OtelAdder | undefined) {
 		this.#gate = gate;
+		this.#sync = sync;
 	}
 
 	increment(value = 1, labels?: Labels): void {
-		assertMeasurement(this.#name, value, true);
+		assertMeasurement(this.#gate.name, value, true);
 		const series = this.#gate.admit(labels);
-		if (series) this.#instrument.add(value, series.attributes);
+		if (!series) return;
+		if (this.#sync) {
+			this.#sync.add(value, series.attributes);
+			return;
+		}
+		const point = this.#totals.get(series.key);
+		if (point) point.value += value;
+		else this.#totals.set(series.key, { attributes: series.attributes, value });
+	}
+
+	remove(labels?: Labels): void {
+		this.#totals.delete(this.#gate.forget(labels));
+	}
+
+	reset(): void {
+		this.#gate.clear();
+		this.#totals.clear();
+	}
+
+	/** Observable form: what one collection reports. */
+	report(result: OtelObservableResult): void {
+		report(this.#totals, result);
 	}
 }
 
 class OtelGauge implements Gauge {
-	readonly #name: string;
-	readonly #gauge: OtelRecorder;
 	readonly #gate: SeriesGate;
+	/** `undefined` for the observable form, which reports {@link #points}. */
+	readonly #sync: OtelRecorder | undefined;
 	/**
 	 * The last value per ADMITTED label set, so bounded by the cap.
 	 *
@@ -151,51 +238,66 @@ class OtelGauge implements Gauge {
 	 * also offers increment/decrement. Keeping the last value is the only way
 	 * to express a relative change against an absolute-only instrument.
 	 */
-	readonly #last = new Map<string, number>();
+	readonly #points = new Map<string, Point>();
 
-	constructor(name: string, gauge: OtelRecorder, gate: SeriesGate) {
-		this.#name = name;
-		this.#gauge = gauge;
+	constructor(gate: SeriesGate, sync: OtelRecorder | undefined) {
 		this.#gate = gate;
+		this.#sync = sync;
 	}
 
 	#apply(labels: Labels | undefined, next: (last: number) => number): void {
 		const series = this.#gate.admit(labels);
 		if (!series) return;
-		const value = next(this.#last.get(series.key) ?? 0);
-		this.#last.set(series.key, value);
-		this.#gauge.record(value, series.attributes);
+		const value = next(this.#points.get(series.key)?.value ?? 0);
+		this.#points.set(series.key, { attributes: series.attributes, value });
+		this.#sync?.record(value, series.attributes);
 	}
 
 	set(value: number, labels?: Labels): void {
-		assertMeasurement(this.#name, value, false);
+		assertMeasurement(this.#gate.name, value, false);
 		this.#apply(labels, () => value);
 	}
 
 	increment(value = 1, labels?: Labels): void {
-		assertMeasurement(this.#name, value, false);
+		assertMeasurement(this.#gate.name, value, false);
 		this.#apply(labels, (last) => last + value);
 	}
 
 	decrement(value = 1, labels?: Labels): void {
-		assertMeasurement(this.#name, value, false);
+		assertMeasurement(this.#gate.name, value, false);
 		this.#apply(labels, (last) => last - value);
+	}
+
+	startTimer(labels?: Labels): EndTimer {
+		return startTimer(labels, (seconds, merged) => this.set(seconds, merged));
+	}
+
+	remove(labels?: Labels): void {
+		this.#points.delete(this.#gate.forget(labels));
+	}
+
+	reset(): void {
+		this.#gate.clear();
+		this.#points.clear();
+	}
+
+	/** Observable form: what one collection reports. */
+	report(result: OtelObservableResult): void {
+		report(this.#points, result);
 	}
 }
 
 class OtelHistogram implements Histogram {
-	readonly #name: string;
-	readonly #instrument: OtelRecorder;
 	readonly #gate: SeriesGate;
+	readonly #instrument: OtelRecorder;
 
-	constructor(name: string, instrument: OtelRecorder, gate: SeriesGate) {
-		this.#name = name;
-		this.#instrument = instrument;
+	constructor(gate: SeriesGate, instrument: OtelRecorder) {
 		this.#gate = gate;
+		this.#instrument = instrument;
 	}
 
 	observe(value: number, labels?: Labels): void {
-		assertMeasurement(this.#name, value, true);
+		assertMeasurement(this.#gate.name, value, true);
 		const series = this.#gate.admit(labels);
 		if (series) this.#instrument.record(value, series.attributes);
 	}
@@ -203,6 +305,61 @@ class OtelHistogram implements Histogram {
 	time<T>(work: () => Promise<T>, labels?: Labels): Promise<T> {
 		return timed(work, (seconds) => this.observe(seconds, labels));
 	}
+
+	startTimer(labels?: Labels): EndTimer {
+		return startTimer(labels, (seconds, merged) =>
+			this.observe(seconds, merged),
+		);
+	}
+
+	remove(labels?: Labels): void {
+		this.#gate.forget(labels);
+	}
+
+	reset(): void {
+		this.#gate.clear();
+	}
+}
+
+/**
+ * Wire `collect` to an observable instrument: run it, then report what the
+ * instrument holds. Reported even when it threw, so a failing callback costs
+ * a fresh value rather than the series; the error still reaches the SDK,
+ * which logs it.
+ */
+function observeWith<T extends { report(result: OtelObservableResult): void }>(
+	observable: OtelObservable,
+	instrument: T,
+	collect: Collect<T>,
+): void {
+	observable.addCallback(async (result) => {
+		try {
+			await collect(instrument);
+		} finally {
+			instrument.report(result);
+		}
+	});
+}
+
+/**
+ * The observable factory a `collect` needs, bound to its meter, or a
+ * declaration-time error.
+ */
+function observableFactory(
+	metric: string,
+	meter: OtelMeter,
+	factory:
+		| ((name: string, options?: OtelInstrumentOptions) => OtelObservable)
+		| undefined,
+	method: string,
+): (name: string, options?: OtelInstrumentOptions) => OtelObservable {
+	if (typeof factory !== "function") {
+		throw new InvalidInstrumentError(
+			metric,
+			`collect needs a meter with ${method}() (any @opentelemetry/api 1.x meter has it)`,
+		);
+	}
+	return (name, options) => factory.call(meter, name, options);
 }
 
 /** `description` always, `unit` only when there is one. */
@@ -236,12 +393,11 @@ export class OtelDriver implements MetricsDriver {
 			declaration,
 			() =>
 				new OtelCounter(
-					declaration.name,
+					new SeriesGate(declaration, Number.MAX_SAFE_INTEGER, () => {}),
 					this.#meter.createCounter(
 						declaration.name,
 						instrumentOptions(declaration),
 					),
-					new SeriesGate(declaration, Number.MAX_SAFE_INTEGER, () => {}),
 				),
 		);
 	}
@@ -254,36 +410,70 @@ export class OtelDriver implements MetricsDriver {
 		return new SeriesGate(declaration, this.#maxSeries, this.#onDropped);
 	}
 
-	createCounter(options: InstrumentOptions): Counter {
+	createCounter(options: CounterOptions): Counter {
 		const declaration = declareInstrument(options);
-		return this.#instruments.counter(
-			declaration,
-			() =>
-				new OtelCounter(
+		const collect = options.collect;
+		assertCollect(declaration.name, collect);
+		const create = collect
+			? observableFactory(
 					declaration.name,
+					this.#meter,
+					this.#meter.createObservableCounter,
+					"createObservableCounter",
+				)
+			: undefined;
+		return this.#instruments.counter(declaration, () => {
+			const gate = this.#gate(declaration);
+			if (!collect || !create) {
+				return new OtelCounter(
+					gate,
 					this.#meter.createCounter(
 						declaration.name,
 						instrumentOptions(declaration),
 					),
-					this.#gate(declaration),
-				),
-		);
+				);
+			}
+			const counter = new OtelCounter(gate, undefined);
+			observeWith(
+				create(declaration.name, instrumentOptions(declaration)),
+				counter,
+				collect,
+			);
+			return counter;
+		});
 	}
 
-	createGauge(options: InstrumentOptions): Gauge {
+	createGauge(options: GaugeOptions): Gauge {
 		const declaration = declareInstrument(options);
-		return this.#instruments.gauge(
-			declaration,
-			() =>
-				new OtelGauge(
+		const collect = options.collect;
+		assertCollect(declaration.name, collect);
+		const create = collect
+			? observableFactory(
 					declaration.name,
+					this.#meter,
+					this.#meter.createObservableGauge,
+					"createObservableGauge",
+				)
+			: undefined;
+		return this.#instruments.gauge(declaration, () => {
+			const gate = this.#gate(declaration);
+			if (!collect || !create) {
+				return new OtelGauge(
+					gate,
 					this.#meter.createGauge(
 						declaration.name,
 						instrumentOptions(declaration),
 					),
-					this.#gate(declaration),
-				),
-		);
+				);
+			}
+			const gauge = new OtelGauge(gate, undefined);
+			observeWith(
+				create(declaration.name, instrumentOptions(declaration)),
+				gauge,
+				collect,
+			);
+			return gauge;
+		});
 	}
 
 	createHistogram(options: HistogramOptions): Histogram {
@@ -303,7 +493,7 @@ export class OtelDriver implements MetricsDriver {
 			declaration,
 			() =>
 				new OtelHistogram(
-					declaration.name,
+					this.#gate(declaration),
 					this.#meter.createHistogram(declaration.name, {
 						...instrumentOptions({ ...declaration, unit }),
 						// No `advice` without declared buckets, so the collector's
@@ -314,7 +504,6 @@ export class OtelDriver implements MetricsDriver {
 							? {}
 							: { advice: { explicitBucketBoundaries: buckets } }),
 					}),
-					this.#gate(declaration),
 				),
 		);
 	}

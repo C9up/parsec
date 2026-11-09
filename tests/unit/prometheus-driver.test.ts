@@ -8,18 +8,18 @@ import {
 } from "../../src/errors.js";
 
 describe("PrometheusDriver", () => {
-	it("renders a counter with HELP and TYPE", () => {
+	it("renders a counter with HELP and TYPE", async () => {
 		const driver = new PrometheusDriver();
 		driver
 			.createCounter({ name: "orders_total", help: "Orders placed." })
 			.increment();
-		const body = driver.scrape();
+		const body = await driver.scrape();
 		expect(body).toContain("# HELP orders_total Orders placed.");
 		expect(body).toContain("# TYPE orders_total counter");
 		expect(body).toContain("orders_total 1");
 	});
 
-	it("refuses a negative increment — it reads downstream as a restart", () => {
+	it("refuses a negative increment — it reads downstream as a restart", async () => {
 		const counter = new PrometheusDriver().createCounter({
 			name: "c_total",
 			help: "c",
@@ -27,7 +27,7 @@ describe("PrometheusDriver", () => {
 		expect(() => counter.increment(-1)).toThrow(InvalidMeasurementError);
 	});
 
-	it("refuses a non-finite measurement, which would poison a sum forever", () => {
+	it("refuses a non-finite measurement, which would poison a sum forever", async () => {
 		const driver = new PrometheusDriver();
 		expect(() =>
 			driver.createGauge({ name: "g", help: "g" }).set(Number.NaN),
@@ -39,7 +39,7 @@ describe("PrometheusDriver", () => {
 		).toThrow(InvalidMeasurementError);
 	});
 
-	it("raises on a label the instrument never declared", () => {
+	it("raises on a label the instrument never declared", async () => {
 		// Almost always the request-derived value that would have made this
 		// instrument unbounded.
 		const counter = new PrometheusDriver().createCounter({
@@ -52,7 +52,7 @@ describe("PrometheusDriver", () => {
 		);
 	});
 
-	it("treats the same labels written in a different order as one series", () => {
+	it("treats the same labels written in a different order as one series", async () => {
 		const driver = new PrometheusDriver();
 		const counter = driver.createCounter({
 			name: "c_total",
@@ -61,10 +61,10 @@ describe("PrometheusDriver", () => {
 		});
 		counter.increment(1, { a: "1", b: "2" });
 		counter.increment(1, { b: "2", a: "1" });
-		expect(driver.scrape()).toContain('c_total{a="1",b="2"} 2');
+		expect(await driver.scrape()).toContain('c_total{a="1",b="2"} 2');
 	});
 
-	it("renders cumulative buckets, a mandatory +Inf, a sum and a count", () => {
+	it("renders cumulative buckets, a mandatory +Inf, a sum and a count", async () => {
 		const driver = new PrometheusDriver();
 		const histogram = driver.createHistogram({
 			name: "d_seconds",
@@ -74,7 +74,7 @@ describe("PrometheusDriver", () => {
 		histogram.observe(0.5);
 		histogram.observe(1.5);
 		histogram.observe(50);
-		const body = driver.scrape();
+		const body = await driver.scrape();
 		expect(body).toContain('d_seconds_bucket{le="1"} 1');
 		// Cumulative: the 1.5 observation counts in le=2 as well as the 0.5.
 		expect(body).toContain('d_seconds_bucket{le="2"} 2');
@@ -84,26 +84,26 @@ describe("PrometheusDriver", () => {
 		expect(body).toContain("d_seconds_count 3");
 	});
 
-	it("drops duplicate bucket bounds, which make quantiles non-monotonic", () => {
+	it("drops duplicate bucket bounds, which make quantiles non-monotonic", async () => {
 		const driver = new PrometheusDriver();
 		driver
 			.createHistogram({ name: "d_seconds", help: "d", buckets: [1, 1, 2] })
 			.observe(0.5);
-		const buckets = (driver.scrape().match(/le="1"/g) ?? []).length;
+		const buckets = ((await driver.scrape()).match(/le="1"/g) ?? []).length;
 		expect(buckets).toBe(1);
 	});
 
-	it("sorts unordered buckets rather than rendering a broken histogram", () => {
+	it("sorts unordered buckets rather than rendering a broken histogram", async () => {
 		const driver = new PrometheusDriver();
 		driver
 			.createHistogram({ name: "d_seconds", help: "d", buckets: [2, 0.5, 1] })
 			.observe(0.75);
-		const body = driver.scrape();
+		const body = await driver.scrape();
 		const order = [...body.matchAll(/le="([^"]+)"/g)].map((m) => m[1]);
 		expect(order).toEqual(["0.5", "1", "2", "+Inf"]);
 	});
 
-	it("caps cardinality and reports the refusal instead of growing forever", () => {
+	it("caps cardinality and reports the refusal instead of growing forever", async () => {
 		const driver = new PrometheusDriver({ maxSeries: 2 });
 		const counter = driver.createCounter({
 			name: "c_total",
@@ -113,7 +113,7 @@ describe("PrometheusDriver", () => {
 		counter.increment(1, { route: "/a" });
 		counter.increment(1, { route: "/b" });
 		counter.increment(1, { route: "/c" });
-		const body = driver.scrape();
+		const body = await driver.scrape();
 		expect(body).toContain('c_total{route="/a"} 1');
 		expect(body).toContain('c_total{route="/b"} 1');
 		expect(body).not.toContain('route="/c"');
@@ -121,7 +121,7 @@ describe("PrometheusDriver", () => {
 		expect(body).toContain('parsec_series_dropped_total{metric="c_total"} 1');
 	});
 
-	it("keeps counting an EXISTING series after the cap is reached", () => {
+	it("keeps counting an EXISTING series after the cap is reached", async () => {
 		const driver = new PrometheusDriver({ maxSeries: 1 });
 		const counter = driver.createCounter({
 			name: "c_total",
@@ -131,10 +131,10 @@ describe("PrometheusDriver", () => {
 		counter.increment(1, { route: "/a" });
 		counter.increment(1, { route: "/b" });
 		counter.increment(1, { route: "/a" });
-		expect(driver.scrape()).toContain('c_total{route="/a"} 2');
+		expect(await driver.scrape()).toContain('c_total{route="/a"} 2');
 	});
 
-	it("labels the dropped counter by metric name, never by the offending value", () => {
+	it("labels the dropped counter by metric name, never by the offending value", async () => {
 		// A counter reporting the dropped LABEL VALUE would reintroduce the
 		// unbounded set it exists to report.
 		const driver = new PrometheusDriver({ maxSeries: 1 });
@@ -145,19 +145,19 @@ describe("PrometheusDriver", () => {
 		});
 		counter.increment(1, { route: "/a" });
 		for (const route of ["/x", "/y", "/z"]) counter.increment(1, { route });
-		const body = driver.scrape();
+		const body = await driver.scrape();
 		expect(body).toContain('parsec_series_dropped_total{metric="c_total"} 3');
 		expect(body).not.toContain("/x");
 	});
 
-	it("returns the same instrument for the same name", () => {
+	it("returns the same instrument for the same name", async () => {
 		const driver = new PrometheusDriver();
 		const a = driver.createCounter({ name: "c_total", help: "c" });
 		const b = driver.createCounter({ name: "c_total", help: "c" });
 		expect(a).toBe(b);
 	});
 
-	it("refuses the same name declared with a different type or label set", () => {
+	it("refuses the same name declared with a different type or label set", async () => {
 		const driver = new PrometheusDriver();
 		driver.createCounter({ name: "x_total", help: "x", labelNames: ["a"] });
 		expect(() => driver.createGauge({ name: "x_total", help: "x" })).toThrow(
@@ -168,12 +168,12 @@ describe("PrometheusDriver", () => {
 		).toThrow(/label set/);
 	});
 
-	it("escapes a label value that would otherwise break the body", () => {
+	it("escapes a label value that would otherwise break the body", async () => {
 		const driver = new PrometheusDriver();
 		driver
 			.createCounter({ name: "c_total", help: "c", labelNames: ["ua"] })
 			.increment(1, { ua: 'evil"\nvalue' });
-		const body = driver.scrape();
+		const body = await driver.scrape();
 		expect(body).toContain('c_total{ua="evil\\"\\nvalue"} 1');
 		// One sample line, not two.
 		expect(
@@ -181,19 +181,19 @@ describe("PrometheusDriver", () => {
 		).toHaveLength(1);
 	});
 
-	it("gauges move both ways", () => {
+	it("gauges move both ways", async () => {
 		const driver = new PrometheusDriver();
 		const gauge = driver.createGauge({ name: "g", help: "g" });
 		gauge.set(10);
 		gauge.increment(5);
 		gauge.decrement(3);
-		expect(driver.scrape()).toContain("g 12");
+		expect(await driver.scrape()).toContain("g 12");
 	});
 
-	it("renders nothing for an instrument that was never touched", () => {
+	it("renders nothing for an instrument that was never touched", async () => {
 		const driver = new PrometheusDriver();
 		driver.createCounter({ name: "never_total", help: "n" });
-		expect(driver.scrape()).toBe("");
+		expect(await driver.scrape()).toBe("");
 	});
 
 	it("times work in seconds and records even when it throws", async () => {
@@ -206,10 +206,10 @@ describe("PrometheusDriver", () => {
 		).rejects.toThrow("boom");
 		// Dropping failed calls is how a latency chart stays flat through an
 		// incident.
-		expect(driver.scrape()).toContain("d_seconds_count 1");
+		expect(await driver.scrape()).toContain("d_seconds_count 1");
 	});
 
-	it("renders a numeric label value as its string, like prom-client", () => {
+	it("renders a numeric label value as its string, like prom-client", async () => {
 		const driver = new PrometheusDriver();
 		const counter = driver.createCounter({
 			name: "responses_total",
@@ -218,10 +218,10 @@ describe("PrometheusDriver", () => {
 		});
 		counter.increment(1, { status: 200 });
 		counter.increment(1, { status: "200" });
-		expect(driver.scrape()).toContain('responses_total{status="200"} 2');
+		expect(await driver.scrape()).toContain('responses_total{status="200"} 2');
 	});
 
-	it("refuses a label value that is not a string or a number at the call, and keeps the scrape alive", () => {
+	it("refuses a label value that is not a string or a number at the call, and keeps the scrape alive", async () => {
 		// The failure used to surface at render time, on every later scrape,
 		// taking every other metric of the process down with it.
 		const driver = new PrometheusDriver();
@@ -248,12 +248,12 @@ describe("PrometheusDriver", () => {
 				expect.objectContaining({ code: "E_PARSEC_INVALID_LABEL_VALUE" }),
 			);
 		}
-		const body = driver.scrape();
+		const body = await driver.scrape();
 		expect(body).toContain("good_total 1");
 		expect(body).not.toContain("bad_total{");
 	});
 
-	it("refuses the same bad label value on gauges and histograms", () => {
+	it("refuses the same bad label value on gauges and histograms", async () => {
 		const driver = new PrometheusDriver();
 		const gauge = driver.createGauge({
 			name: "g",
@@ -272,10 +272,10 @@ describe("PrometheusDriver", () => {
 		expect(() =>
 			Reflect.apply(histogram.observe, histogram, [1, labels]),
 		).toThrow(ParsecError);
-		expect(driver.scrape()).toBe("");
+		expect(await driver.scrape()).toBe("");
 	});
 
-	it("refuses an instrument declared without a string help at declaration", () => {
+	it("refuses an instrument declared without a string help at declaration", async () => {
 		const driver = new PrometheusDriver();
 		for (const help of [undefined, 42, null]) {
 			const options: Record<string, unknown> = { name: "x_total", help };
@@ -287,10 +287,10 @@ describe("PrometheusDriver", () => {
 		}
 		// Nothing half-registered: the scrape still renders.
 		driver.createCounter({ name: "ok_total", help: "o" }).increment();
-		expect(driver.scrape()).toContain("ok_total 1");
+		expect(await driver.scrape()).toContain("ok_total 1");
 	});
 
-	it("keeps label sets apart whatever separator their values contain", () => {
+	it("keeps label sets apart whatever separator their values contain", async () => {
 		// The key used to join values with a space: {a:"x y",b:"z"} and
 		// {a:"x",b:"y z"} landed on one series, the second credited to the first.
 		const driver = new PrometheusDriver();
@@ -315,8 +315,7 @@ describe("PrometheusDriver", () => {
 		pairs.forEach(([a, b], i) => {
 			counter.increment(i + 1, { a, b });
 		});
-		const lines = driver
-			.scrape()
+		const lines = (await driver.scrape())
 			.split("\n")
 			.filter((line) => line.startsWith("c_total{"));
 		expect(lines).toHaveLength(pairs.length);
@@ -324,7 +323,7 @@ describe("PrometheusDriver", () => {
 		expect(lines).toContain('c_total{a="x",b="y z"} 2');
 	});
 
-	it("counts the cap per distinct label set, not per colliding key", () => {
+	it("counts the cap per distinct label set, not per colliding key", async () => {
 		const driver = new PrometheusDriver({ maxSeries: 2 });
 		const counter = driver.createCounter({
 			name: "c_total",
@@ -334,12 +333,12 @@ describe("PrometheusDriver", () => {
 		counter.increment(1, { a: "x y", b: "z" });
 		counter.increment(1, { a: "x", b: "y z" });
 		counter.increment(1, { a: "q", b: "r" });
-		expect(driver.scrape()).toContain(
+		expect(await driver.scrape()).toContain(
 			'parsec_series_dropped_total{metric="c_total"} 1',
 		);
 	});
 
-	it("refuses a histogram label named le, which the bucket lines own", () => {
+	it("refuses a histogram label named le, which the bucket lines own", async () => {
 		// Accepted, it vanished from every bucket line and stayed on _sum and
 		// _count: one series rendered with two different label sets.
 		const driver = new PrometheusDriver();
@@ -350,10 +349,10 @@ describe("PrometheusDriver", () => {
 		driver
 			.createCounter({ name: "c_total", help: "c", labelNames: ["le"] })
 			.increment(1, { le: "x" });
-		expect(driver.scrape()).toContain('c_total{le="x"} 1');
+		expect(await driver.scrape()).toContain('c_total{le="x"} 1');
 	});
 
-	it("refuses NaN and -Infinity bucket bounds at declaration", () => {
+	it("refuses NaN and -Infinity bucket bounds at declaration", async () => {
 		const driver = new PrometheusDriver();
 		for (const bound of [Number.NaN, Number.NEGATIVE_INFINITY]) {
 			expect(() =>
@@ -377,7 +376,7 @@ describe("PrometheusDriver", () => {
 		}
 	});
 
-	it("folds a +Infinity bound into the mandatory +Inf bucket instead of rendering it twice", () => {
+	it("folds a +Infinity bound into the mandatory +Inf bucket instead of rendering it twice", async () => {
 		const driver = new PrometheusDriver();
 		const histogram = driver.createHistogram({
 			name: "h",
@@ -386,8 +385,7 @@ describe("PrometheusDriver", () => {
 		});
 		histogram.observe(0.7);
 		histogram.observe(3);
-		const buckets = driver
-			.scrape()
+		const buckets = (await driver.scrape())
 			.split("\n")
 			.filter((line) => line.startsWith("h_bucket"));
 		expect(buckets).toEqual([

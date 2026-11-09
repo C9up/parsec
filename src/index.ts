@@ -12,6 +12,11 @@
 // Contributes this package's tokens to ream's ContainerBindings. Type-only.
 import "./augmentations.js";
 
+export {
+	collectDefaultMetrics,
+	type DefaultMetricsOptions,
+	type InstrumentFactory,
+} from "./defaultMetrics.js";
 export { HEALTH_CHANNEL, instrumentHealthChecks } from "./diagnostics.js";
 export { NoopDriver } from "./drivers/NoopDriver.js";
 export {
@@ -48,12 +53,17 @@ export {
 	MetricsManager,
 } from "./MetricsManager.js";
 export type {
+	Collect,
 	Counter,
+	CounterOptions,
 	DriverOptions,
+	EndTimer,
 	Gauge,
+	GaugeOptions,
 	Histogram,
 	HistogramOptions,
 	InstrumentOptions,
 	Labels,
 	MetricsDriver,
+	SeriesLifecycle,
 } from "./types.js";

@@ -6,18 +6,41 @@
  * needing a `if (metrics)` around every measurement.
  */
 
-import type { Counter, Gauge, Histogram, MetricsDriver } from "../types.js";
+import type {
+	Counter,
+	EndTimer,
+	Gauge,
+	Histogram,
+	MetricsDriver,
+} from "../types.js";
 
-const counter: Counter = { increment: () => {} };
+const nothing = (): void => {};
+/** Still measures the time: the caller may use the returned seconds. */
+const timer = (): EndTimer => {
+	const started = process.hrtime.bigint();
+	return () => Number(process.hrtime.bigint() - started) / 1e9;
+};
+
+const counter: Counter = {
+	increment: nothing,
+	remove: nothing,
+	reset: nothing,
+};
 const gauge: Gauge = {
-	set: () => {},
-	increment: () => {},
-	decrement: () => {},
+	set: nothing,
+	increment: nothing,
+	decrement: nothing,
+	startTimer: timer,
+	remove: nothing,
+	reset: nothing,
 };
 const histogram: Histogram = {
-	observe: () => {},
+	observe: nothing,
 	// Still RUNS the work — the instrument is inert, the application is not.
 	time: (work) => work(),
+	startTimer: timer,
+	remove: nothing,
+	reset: nothing,
 };
 
 export class NoopDriver implements MetricsDriver {

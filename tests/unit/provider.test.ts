@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { NoopDriver } from "../../src/drivers/NoopDriver.js";
 import { PrometheusDriver } from "../../src/drivers/PrometheusDriver.js";
 import { UnknownExporterError } from "../../src/errors.js";
 import { PARSEC_KEY } from "../../src/http.js";
@@ -272,17 +273,11 @@ describe("MetricsManager", () => {
 
 	it("shuts down every exporter that was built, and none that was not", async () => {
 		const shutdown = vi.fn().mockResolvedValue(undefined);
+		const noop = new NoopDriver();
 		const inert = (): MetricsDriver => ({
-			createCounter: () => ({ increment: () => {} }),
-			createGauge: () => ({
-				set: () => {},
-				increment: () => {},
-				decrement: () => {},
-			}),
-			createHistogram: () => ({
-				observe: () => {},
-				time: <T>(work: () => Promise<T>) => work(),
-			}),
+			createCounter: () => noop.createCounter(),
+			createGauge: () => noop.createGauge(),
+			createHistogram: () => noop.createHistogram(),
 			shutdown,
 		});
 		const metrics = new MetricsManager({

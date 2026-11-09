@@ -26,11 +26,12 @@ import { PrometheusDriver } from "./drivers/PrometheusDriver.js";
 import { UnknownExporterError } from "./errors.js";
 import type {
 	Counter,
+	CounterOptions,
 	DriverOptions,
 	Gauge,
+	GaugeOptions,
 	Histogram,
 	HistogramOptions,
-	InstrumentOptions,
 	MetricsDriver,
 } from "./types.js";
 
@@ -89,11 +90,11 @@ export class MetricsRecorder {
 		return this.#driver;
 	}
 
-	counter(options: InstrumentOptions): Counter {
+	counter(options: CounterOptions): Counter {
 		return this.#driver.createCounter(options);
 	}
 
-	gauge(options: InstrumentOptions): Gauge {
+	gauge(options: GaugeOptions): Gauge {
 		return this.#driver.createGauge(options);
 	}
 
@@ -167,12 +168,12 @@ export class MetricsManager {
 	}
 
 	/** {@link MetricsRecorder.counter} on the default exporter. */
-	counter(options: InstrumentOptions): Counter {
+	counter(options: CounterOptions): Counter {
 		return this.use().counter(options);
 	}
 
 	/** {@link MetricsRecorder.gauge} on the default exporter. */
-	gauge(options: InstrumentOptions): Gauge {
+	gauge(options: GaugeOptions): Gauge {
 		return this.use().gauge(options);
 	}
 
