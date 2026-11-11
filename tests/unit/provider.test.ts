@@ -156,6 +156,35 @@ describe("services/main", () => {
 		restore();
 		expect(getMetrics()).toBeUndefined();
 	});
+
+	it("fakeMetrics puts back the manager it replaced", () => {
+		const real = new MetricsManager();
+		setMetrics(real);
+		try {
+			const { metrics: fake, restore } = fakeMetrics();
+			expect(getMetrics()).toBe(fake);
+			restore();
+			// A suite that booted the app keeps its manager after the fake.
+			expect(getMetrics()).toBe(real);
+		} finally {
+			clearMetrics();
+		}
+	});
+
+	it("fakeMetrics leaves alone a manager seated after it", () => {
+		const real = new MetricsManager();
+		setMetrics(real);
+		try {
+			const { restore } = fakeMetrics();
+			const other = new MetricsManager();
+			setMetrics(other);
+			restore();
+			// Not the fake's to replace: a nested fake or an app booted since.
+			expect(getMetrics()).toBe(other);
+		} finally {
+			clearMetrics();
+		}
+	});
 });
 
 describe("MetricsManager", () => {
