@@ -318,6 +318,7 @@ export class PrometheusDriver implements MetricsDriver {
 		});
 		return this.#instruments.counter(
 			declaration,
+			undefined,
 			() => new PromCounter(declaration, Number.MAX_SAFE_INTEGER, () => {}),
 		);
 	}
@@ -331,6 +332,7 @@ export class PrometheusDriver implements MetricsDriver {
 		assertCollect(declaration.name, options.collect);
 		return this.#instruments.counter(
 			declaration,
+			options.collect,
 			() =>
 				new PromCounter(
 					declaration,
@@ -346,6 +348,7 @@ export class PrometheusDriver implements MetricsDriver {
 		assertCollect(declaration.name, options.collect);
 		return this.#instruments.gauge(
 			declaration,
+			options.collect,
 			() =>
 				new PromGauge(
 					declaration,
@@ -365,6 +368,7 @@ export class PrometheusDriver implements MetricsDriver {
 		);
 		return this.#instruments.histogram(
 			declaration,
+			buckets,
 			() =>
 				new PromHistogram(
 					declaration,

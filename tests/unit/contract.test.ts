@@ -32,10 +32,13 @@ function recordingMeter() {
 			calls.push({ instrument: name, value, attributes });
 		},
 	});
+	const observable = () => ({ addCallback: () => {} });
 	const meter: OtelMeter = {
 		createCounter: (name) => instrument(name),
 		createGauge: (name) => instrument(name),
 		createHistogram: (name) => instrument(name),
+		createObservableCounter: observable,
+		createObservableGauge: observable,
 	};
 	return { meter, calls };
 }
@@ -218,6 +221,52 @@ describe.each(cases)("instrument contract: $name", (c) => {
 		expect(() =>
 			driver.createCounter({ name: "x", help: "h", labelNames: ["b"] }),
 		).toThrow(InstrumentConflictError);
+	});
+
+	it("refuses one name re-declared with a different help, unit, bucket list or collect", () => {
+		const { driver } = c.build();
+		const conflict = expect.objectContaining({
+			code: "E_PARSEC_INSTRUMENT_CONFLICT",
+		});
+		driver.createHistogram({ name: "h", help: "h", buckets: [1, 2] });
+		// Kept silently, the second ladder would never apply: an observe(5)
+		// through it lands in +Inf of the first.
+		expect(() =>
+			driver.createHistogram({ name: "h", help: "h", buckets: [10, 20] }),
+		).toThrow(conflict);
+		expect(() => driver.createHistogram({ name: "h", help: "h" })).toThrow(
+			conflict,
+		);
+		expect(() =>
+			driver.createHistogram({ name: "h", help: "other", buckets: [1, 2] }),
+		).toThrow(conflict);
+		expect(() =>
+			driver.createHistogram({
+				name: "h",
+				help: "h",
+				buckets: [1, 2],
+				unit: "By",
+			}),
+		).toThrow(conflict);
+		// The same ladder written differently is the same declaration.
+		expect(
+			driver.createHistogram({ name: "h", help: "h", buckets: [2, 1, 2] }),
+		).toBe(driver.createHistogram({ name: "h", help: "h", buckets: [1, 2] }));
+
+		const collect = (): void => {};
+		const gauge = driver.createGauge({ name: "g", help: "h", collect });
+		expect(driver.createGauge({ name: "g", help: "h", collect })).toBe(gauge);
+		// A second callback would be dropped and the first one keep reporting.
+		expect(() =>
+			driver.createGauge({ name: "g", help: "h", collect: () => {} }),
+		).toThrow(conflict);
+		expect(() => driver.createGauge({ name: "g", help: "h" })).toThrow(
+			conflict,
+		);
+		driver.createCounter({ name: "c_total", help: "h" });
+		expect(() =>
+			driver.createCounter({ name: "c_total", help: "h", collect }),
+		).toThrow(conflict);
 	});
 
 	it("caps the label sets of every instrument and counts the refusals", async () => {

@@ -80,7 +80,13 @@ the elapsed seconds.
 
 `collectDefaultMetrics(metrics)` adds the process baseline — CPU, memory,
 event-loop lag, file descriptors, GC, Node version — under prom-client's names,
-so existing dashboards read it unchanged. It returns its stop.
+so existing dashboards read it unchanged. It returns its stop; called again
+after a stop, it starts over on the instruments it declared the first time.
+
+Declaring a name twice returns the instrument already there, as long as the
+declaration is the same. A different type, label set, help, unit, bucket list
+or `collect` callback throws `E_PARSEC_INSTRUMENT_CONFLICT`: kept silently, the
+second declaration would never take effect.
 
 `metrics.use("otel")` records to a named exporter instead of the default —
 scrape *and* push, if that is what the deployment wants.

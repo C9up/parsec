@@ -130,6 +130,43 @@ describe("collectDefaultMetrics", () => {
 		again();
 	});
 
+	it("reads the event loop again after a stop and a restart", async () => {
+		const metrics = manager();
+		// Stopped before any scrape: every delay statistic is still unset.
+		collectDefaultMetrics(metrics)();
+		const stop = collectDefaultMetrics(metrics);
+		try {
+			// Long enough for the restarted monitor to take samples.
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			const body = (await metrics.scrape()) ?? "";
+			// Read from the restarted run's monitor; with the first run's
+			// callback still bound, the statistics stayed at zero for good.
+			expect(
+				sampleOf(body, "nodejs_eventloop_lag_max_seconds"),
+			).toBeGreaterThan(0);
+			expect(
+				sampleOf(body, "nodejs_eventloop_lag_mean_seconds"),
+			).toBeGreaterThan(0);
+		} finally {
+			stop();
+		}
+	});
+
+	it("refuses a restart that changes the GC buckets of the running declaration", () => {
+		const metrics = manager();
+		collectDefaultMetrics(metrics, { gcDurationBuckets: [0.1, 1] })();
+		expect(() =>
+			collectDefaultMetrics(metrics, { gcDurationBuckets: [0.5, 5] }),
+		).toThrow(
+			expect.objectContaining({ code: "E_PARSEC_INSTRUMENT_CONFLICT" }),
+		);
+		// The refused restart left nothing running: a matching one still starts.
+		const stop = collectDefaultMetrics(metrics, {
+			gcDurationBuckets: [0.1, 1],
+		});
+		stop();
+	});
+
 	it("feeds an OpenTelemetry meter through observable instruments", async () => {
 		const callbacks = new Map<
 			string,

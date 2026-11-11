@@ -96,10 +96,42 @@ export function assertMeasurement(
 	}
 }
 
-type Entry<C, G, H> =
-	| { kind: "counter"; labelNames: readonly string[]; instrument: C }
-	| { kind: "gauge"; labelNames: readonly string[]; instrument: G }
-	| { kind: "histogram"; labelNames: readonly string[]; instrument: H };
+/**
+ * What a re-declaration must repeat to get the existing instrument back:
+ * everything that changes what is recorded or how it is described.
+ */
+interface Shape {
+	labelNames: readonly string[];
+	help: string;
+	unit: string | undefined;
+	/** The resolved ladder, histograms only. */
+	buckets: readonly number[] | undefined;
+	/** The `collect` callback, compared by identity. */
+	collect: unknown;
+}
+
+type Entry<C, G, H> = Shape &
+	(
+		| { kind: "counter"; instrument: C }
+		| { kind: "gauge"; instrument: G }
+		| { kind: "histogram"; instrument: H }
+	);
+
+function sameList<T>(a: readonly T[], b: readonly T[]): boolean {
+	return a.length === b.length && a.every((item, i) => item === b[i]);
+}
+
+/** The first part of `shape` that differs from `existing`, by name. */
+function difference(existing: Shape, shape: Shape): string | undefined {
+	if (!sameList(existing.labelNames, shape.labelNames)) return "label set";
+	if (existing.help !== shape.help) return "help";
+	if (existing.unit !== shape.unit) return "unit";
+	if (!sameList(existing.buckets ?? [], shape.buckets ?? [])) {
+		return "bucket list";
+	}
+	if (existing.collect !== shape.collect) return "collect callback";
+	return undefined;
+}
 
 /**
  * Instruments by name, built once.
@@ -107,8 +139,12 @@ type Entry<C, G, H> =
  * Declaring the same name twice is normal — two modules instrumenting the
  * same thing — and returns the existing instrument, because a caller that
  * creates one per request is the other half of the cardinality problem.
- * Declaring it with a DIFFERENT type or label set is a bug that would
- * otherwise export two incompatible series under one name.
+ * Declaring it with a DIFFERENT type, label set, help, unit, bucket list or
+ * `collect` callback is refused: the existing instrument would be returned
+ * with the first declaration in force, so the second caller's ladder would
+ * never bucket anything and its callback would never run, without a word.
+ * prom-client refuses every second registration of a name; NAMED DEVIATION:
+ * an identical one is accepted here, for the per-request reason above.
  */
 export class InstrumentRegistry<C, G, H> {
 	readonly #entries = new Map<string, Entry<C, G, H>>();
@@ -116,42 +152,56 @@ export class InstrumentRegistry<C, G, H> {
 	#existing(
 		kind: Entry<C, G, H>["kind"],
 		name: string,
-		labelNames: readonly string[],
+		shape: Shape,
 	): Entry<C, G, H> | undefined {
 		const existing = this.#entries.get(name);
 		if (!existing) return undefined;
 		if (existing.kind !== kind) throw new InstrumentConflictError(name, "type");
-		const same =
-			existing.labelNames.length === labelNames.length &&
-			existing.labelNames.every((label, i) => label === labelNames[i]);
-		if (!same) throw new InstrumentConflictError(name, "label set");
+		const differs = difference(existing, shape);
+		if (differs) throw new InstrumentConflictError(name, differs);
 		return existing;
 	}
 
-	counter(declaration: Declaration, build: () => C): C {
-		const { name, labelNames } = declaration;
-		const existing = this.#existing("counter", name, labelNames);
+	counter(declaration: Declaration, collect: unknown, build: () => C): C {
+		const shape = shapeOf(declaration, undefined, collect);
+		const existing = this.#existing("counter", declaration.name, shape);
 		if (existing?.kind === "counter") return existing.instrument;
 		const instrument = build();
-		this.#entries.set(name, { kind: "counter", labelNames, instrument });
+		this.#entries.set(declaration.name, {
+			...shape,
+			kind: "counter",
+			instrument,
+		});
 		return instrument;
 	}
 
-	gauge(declaration: Declaration, build: () => G): G {
-		const { name, labelNames } = declaration;
-		const existing = this.#existing("gauge", name, labelNames);
+	gauge(declaration: Declaration, collect: unknown, build: () => G): G {
+		const shape = shapeOf(declaration, undefined, collect);
+		const existing = this.#existing("gauge", declaration.name, shape);
 		if (existing?.kind === "gauge") return existing.instrument;
 		const instrument = build();
-		this.#entries.set(name, { kind: "gauge", labelNames, instrument });
+		this.#entries.set(declaration.name, {
+			...shape,
+			kind: "gauge",
+			instrument,
+		});
 		return instrument;
 	}
 
-	histogram(declaration: Declaration, build: () => H): H {
-		const { name, labelNames } = declaration;
-		const existing = this.#existing("histogram", name, labelNames);
+	histogram(
+		declaration: Declaration,
+		buckets: readonly number[],
+		build: () => H,
+	): H {
+		const shape = shapeOf(declaration, buckets, undefined);
+		const existing = this.#existing("histogram", declaration.name, shape);
 		if (existing?.kind === "histogram") return existing.instrument;
 		const instrument = build();
-		this.#entries.set(name, { kind: "histogram", labelNames, instrument });
+		this.#entries.set(declaration.name, {
+			...shape,
+			kind: "histogram",
+			instrument,
+		});
 		return instrument;
 	}
 
@@ -159,6 +209,20 @@ export class InstrumentRegistry<C, G, H> {
 	*instruments(): IterableIterator<C | G | H> {
 		for (const entry of this.#entries.values()) yield entry.instrument;
 	}
+}
+
+function shapeOf(
+	declaration: Declaration,
+	buckets: readonly number[] | undefined,
+	collect: unknown,
+): Shape {
+	return {
+		labelNames: declaration.labelNames,
+		help: declaration.help,
+		unit: declaration.unit,
+		buckets,
+		collect,
+	};
 }
 
 /** Name of the built-in counter that reports the cap being hit. */

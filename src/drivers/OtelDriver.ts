@@ -391,6 +391,7 @@ export class OtelDriver implements MetricsDriver {
 		});
 		this.#dropped = this.#instruments.counter(
 			declaration,
+			undefined,
 			() =>
 				new OtelCounter(
 					new SeriesGate(declaration, Number.MAX_SAFE_INTEGER, () => {}),
@@ -422,7 +423,7 @@ export class OtelDriver implements MetricsDriver {
 					"createObservableCounter",
 				)
 			: undefined;
-		return this.#instruments.counter(declaration, () => {
+		return this.#instruments.counter(declaration, collect, () => {
 			const gate = this.#gate(declaration);
 			if (!collect || !create) {
 				return new OtelCounter(
@@ -455,7 +456,7 @@ export class OtelDriver implements MetricsDriver {
 					"createObservableGauge",
 				)
 			: undefined;
-		return this.#instruments.gauge(declaration, () => {
+		return this.#instruments.gauge(declaration, collect, () => {
 			const gate = this.#gate(declaration);
 			if (!collect || !create) {
 				return new OtelGauge(
@@ -491,6 +492,7 @@ export class OtelDriver implements MetricsDriver {
 			declaration.unit ?? (options.buckets === undefined ? "s" : undefined);
 		return this.#instruments.histogram(
 			declaration,
+			buckets,
 			() =>
 				new OtelHistogram(
 					this.#gate(declaration),

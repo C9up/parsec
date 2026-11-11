@@ -52,8 +52,23 @@ const GC_KINDS = new Map<number, string>([
 	[perf.NODE_PERFORMANCE_GC_WEAKCB, "weakcb"],
 ]);
 
-/** One target is collected once: a second monitor and GC observer would double-count. */
-const running = new WeakMap<InstrumentFactory, () => void>();
+/**
+ * One declared baseline: its instruments live as long as the target, the
+ * monitors only while it runs.
+ */
+interface Baseline {
+	/** The stop of the run in progress, undefined while stopped. */
+	stop: (() => void) | undefined;
+	/** The event-loop delay monitor of the run in progress. */
+	delay: IntervalHistogram | undefined;
+}
+
+/**
+ * Baselines by target, then by prefix. Kept after a stop, so a restart reuses
+ * the instruments and their `collect` callbacks instead of declaring new ones
+ * the registry would refuse, and the callbacks read the new run's monitor.
+ */
+const baselines = new WeakMap<InstrumentFactory, Map<string, Baseline>>();
 
 /** The CPU time `process.cpuUsage()` reports, in seconds, as a running total. */
 function cpuCounter(
@@ -93,16 +108,29 @@ function maxFileDescriptors(): number | undefined {
 /**
  * Declare the baseline on `metrics` and start the two monitors it needs
  * (event-loop delay, GC). Returns the stop; calling it again for the same
- * target while running returns the same stop.
+ * target while running returns the same stop. One target is collected once:
+ * a second monitor and GC observer would double-count. After a stop it starts
+ * again on the instruments it declared the first time.
  */
 export function collectDefaultMetrics(
 	metrics: InstrumentFactory,
 	options: DefaultMetricsOptions = {},
 ): () => void {
-	const existing = running.get(metrics);
-	if (existing) return existing;
-
+	const byPrefix = baselines.get(metrics) ?? new Map<string, Baseline>();
+	for (const baseline of byPrefix.values()) {
+		if (baseline.stop) return baseline.stop;
+	}
 	const prefix = options.prefix ?? "";
+	const baseline = byPrefix.get(prefix) ?? declareBaseline(metrics, prefix);
+	const stop = startBaseline(metrics, baseline, prefix, options);
+	byPrefix.set(prefix, baseline);
+	baselines.set(metrics, byPrefix);
+	return stop;
+}
+
+/** Declare every instrument whose value is read at collection or set once. */
+function declareBaseline(metrics: InstrumentFactory, prefix: string): Baseline {
+	const baseline: Baseline = { stop: undefined, delay: undefined };
 	const named = (name: string): string => `${prefix}${name}`;
 
 	cpuCounter(
@@ -162,13 +190,9 @@ export function collectDefaultMetrics(
 		},
 	});
 
-	// The delay statistics come from a monitor sampling all along; each read
-	// reports the window since the previous one, then starts a new window.
-	let stopped = false;
-	const delay: IntervalHistogram = monitorEventLoopDelay({
-		resolution: options.eventLoopMonitoringPrecision ?? 10,
-	});
-	delay.enable();
+	// The delay statistics come from the run's monitor, sampling all along;
+	// each read reports the window since the previous one, then starts a new
+	// window.
 	const stats: Array<
 		[string, string, (histogram: IntervalHistogram) => number]
 	> = [
@@ -214,7 +238,8 @@ export function collectDefaultMetrics(
 			const started = process.hrtime.bigint();
 			await new Promise<void>((resolve) => setImmediate(resolve));
 			gauge.set(Number(process.hrtime.bigint() - started) / 1e9);
-			if (stopped) return;
+			const delay = baseline.delay;
+			if (!delay) return;
 			for (const [target, read] of delayGauges) {
 				const nanoseconds = read(delay);
 				// A window with no sample reports NaN or a sentinel; skip it
@@ -279,8 +304,20 @@ export function collectDefaultMetrics(
 		})
 		.set(1, { version: process.version, major, minor, patch });
 
+	return baseline;
+}
+
+/** Start the two monitors of one run and return its stop. */
+function startBaseline(
+	metrics: InstrumentFactory,
+	baseline: Baseline,
+	prefix: string,
+	options: DefaultMetricsOptions,
+): () => void {
+	// Declared per run, before any monitor starts: a restart asking for other
+	// buckets is refused by the registry and leaves nothing running.
 	const gcDuration = metrics.histogram({
-		name: named("nodejs_gc_duration_seconds"),
+		name: `${prefix}nodejs_gc_duration_seconds`,
 		help: "Garbage collection duration by kind, one of major, minor, incremental or weakcb.",
 		labelNames: ["kind"],
 		buckets: options.gcDurationBuckets ?? [0.001, 0.01, 0.1, 1, 2, 5],
@@ -302,13 +339,19 @@ export function collectDefaultMetrics(
 	});
 	gc.observe({ entryTypes: ["gc"] });
 
+	const delay = monitorEventLoopDelay({
+		resolution: options.eventLoopMonitoringPrecision ?? 10,
+	});
+	delay.enable();
+	baseline.delay = delay;
+
 	const stop = (): void => {
-		if (stopped) return;
-		stopped = true;
+		if (baseline.stop !== stop) return;
+		baseline.stop = undefined;
+		baseline.delay = undefined;
 		delay.disable();
 		gc.disconnect();
-		running.delete(metrics);
 	};
-	running.set(metrics, stop);
+	baseline.stop = stop;
 	return stop;
 }
