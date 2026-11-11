@@ -23,9 +23,13 @@ interface Codemods {
 		state?: Record<string, string | number | boolean>,
 		options?: { force?: boolean },
 	): Promise<{ path: string; contents: string }>;
+	/**
+	 * Appends to the tier by default; `position: 'before'` prepends. A ream
+	 * older than the option always prepended and ignores it.
+	 */
 	registerMiddleware(
 		importPath: string,
-		options?: { tier?: "server" | "router" },
+		options?: { tier?: "server" | "router"; position?: "before" | "after" },
 	): Promise<void>;
 	/** Absent from a ream older than the hook; the rules are then added by hand. */
 	defineEnvValidations?(definition: {
@@ -63,8 +67,13 @@ export async function configure(codemods: Codemods): Promise<void> {
 	await codemods.makeUsingStub(stubsRoot, "config/metrics.stub");
 
 	// Server tier: router middleware never sees an unmatched request, and the
-	// 404 sweep the error-rate chart exists to show would be invisible.
-	await codemods.registerMiddleware("@c9up/parsec/http", { tier: "server" });
+	// 404 sweep the error-rate chart exists to show would be invisible. And
+	// first in it: appended after the app's own server middleware, their time
+	// and the responses they short-circuit would go unmeasured.
+	await codemods.registerMiddleware("@c9up/parsec/http", {
+		tier: "server",
+		position: "before",
+	});
 
 	// NOT mounted by the provider: a metrics body names every route the
 	// application has, its traffic shape and its error rate. Publishing it is

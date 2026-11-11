@@ -119,14 +119,18 @@ describe("configure", () => {
 		expect(route).not.toContain("|| undefined");
 	});
 
-	it("registers the HTTP middleware on the server tier", async () => {
+	it("registers the HTTP middleware first on the server tier", async () => {
 		// Router tier would never see an unmatched request, and the 404 sweep
-		// the error-rate chart exists to show would be invisible.
+		// the error-rate chart exists to show would be invisible. First, since
+		// the codemod appends by default: after the app's own server
+		// middleware, their time and the responses they short-circuit would
+		// go unmeasured.
 		const c = codemods();
 		await configure(c);
-		expect(c.registerMiddleware).toHaveBeenCalledWith("@c9up/parsec/http", {
-			tier: "server",
-		});
+		expect(c.registerMiddleware).toHaveBeenCalledExactlyOnceWith(
+			"@c9up/parsec/http",
+			{ tier: "server", position: "before" },
+		);
 	});
 
 	it("preloads the route file it writes, so the endpoint is actually mounted", async () => {
