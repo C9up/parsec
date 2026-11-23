@@ -18,7 +18,7 @@
  * the application's own code is allowed to do.
  */
 
-import { InvalidInstrumentError } from "../errors.js";
+import { E_PARSEC_INVALID_INSTRUMENT } from "../errors.js";
 import {
 	assertCollect,
 	assertMeasurement,
@@ -354,10 +354,10 @@ function observableFactory(
 	method: string,
 ): (name: string, options?: OtelInstrumentOptions) => OtelObservable {
 	if (typeof factory !== "function") {
-		throw new InvalidInstrumentError(
+		throw new E_PARSEC_INVALID_INSTRUMENT([
 			metric,
 			`collect needs a meter with ${method}() (any @opentelemetry/api 1.x meter has it)`,
-		);
+		]);
 	}
 	return (name, options) => factory.call(meter, name, options);
 }

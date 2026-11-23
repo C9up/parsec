@@ -23,7 +23,7 @@
 import { NoopDriver } from "./drivers/NoopDriver.js";
 import { OtelDriver, type OtelDriverOptions } from "./drivers/OtelDriver.js";
 import { PrometheusDriver } from "./drivers/PrometheusDriver.js";
-import { UnknownExporterError } from "./errors.js";
+import { E_PARSEC_UNKNOWN_EXPORTER } from "./errors.js";
 import type {
 	Counter,
 	CounterOptions,
@@ -138,7 +138,7 @@ export class MetricsManager {
 	}
 
 	/**
-	 * The factory declared under `name`, or UnknownExporterError.
+	 * The factory declared under `name`, or E_PARSEC_UNKNOWN_EXPORTER.
 	 *
 	 * An OWN key only: the name comes from the environment
 	 * (METRICS_EXPORTER), and an indexed lookup would resolve `toString` or
@@ -151,7 +151,10 @@ export class MetricsManager {
 			? exporters[name]
 			: undefined;
 		if (typeof factory !== "function") {
-			throw new UnknownExporterError(name, Object.keys(exporters));
+			throw new E_PARSEC_UNKNOWN_EXPORTER([
+				name,
+				Object.keys(exporters).join(", ") || "(none)",
+			]);
 		}
 		return factory;
 	}

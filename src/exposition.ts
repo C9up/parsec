@@ -12,7 +12,7 @@
  * answer here is to escape rather than reject.
  */
 
-import { InvalidMetricNameError } from "./errors.js";
+import { E_PARSEC_INVALID_NAME } from "./errors.js";
 
 const METRIC_NAME = /^[a-zA-Z_:][a-zA-Z0-9_:]*$/;
 const LABEL_NAME = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
@@ -22,32 +22,32 @@ export function assertMetricName(name: string): void {
 	// The type check first: `RegExp.test(undefined)` tests the string
 	// "undefined", which is a perfectly valid name.
 	if (typeof name !== "string" || !METRIC_NAME.test(name)) {
-		throw new InvalidMetricNameError(
+		throw new E_PARSEC_INVALID_NAME([
 			"metric",
 			name,
 			"it must match [a-zA-Z_:][a-zA-Z0-9_:]*",
-		);
+		]);
 	}
 }
 
 /** Validate a label name, at declaration time. */
 export function assertLabelName(name: string): void {
 	if (typeof name !== "string" || !LABEL_NAME.test(name)) {
-		throw new InvalidMetricNameError(
+		throw new E_PARSEC_INVALID_NAME([
 			"label",
 			name,
 			"it must match [a-zA-Z_][a-zA-Z0-9_]*",
-		);
+		]);
 	}
 	// `__name__`, `__meta_*` and friends belong to the scraper. A metric that
 	// sets one does not fail — it overwrites the scraper's own idea of what
 	// the series is, which is worse.
 	if (name.startsWith("__")) {
-		throw new InvalidMetricNameError(
+		throw new E_PARSEC_INVALID_NAME([
 			"label",
 			name,
 			"names beginning with __ are reserved for the scraper",
-		);
+		]);
 	}
 }
 

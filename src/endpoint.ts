@@ -19,7 +19,10 @@
 
 import { timingSafeEqual } from "node:crypto";
 import { PROMETHEUS_CONTENT_TYPE } from "./drivers/PrometheusDriver.js";
-import { EmptyTokenError, UnprotectedEndpointError } from "./errors.js";
+import {
+	E_PARSEC_EMPTY_TOKEN,
+	E_PARSEC_UNPROTECTED_ENDPOINT,
+} from "./errors.js";
 import type { MetricsManager } from "./MetricsManager.js";
 
 export interface MetricsEndpointContext {
@@ -67,20 +70,20 @@ function releaseToken(token: string | ReleasableSecret): string {
 function resolveToken(options: MetricsEndpointOptions): string | null {
 	if (options.token !== undefined) {
 		if (options.public === true) {
-			throw new UnprotectedEndpointError(
+			throw new E_PARSEC_UNPROTECTED_ENDPOINT([
 				"the metrics endpoint was given both a token and `public: true`; pick one.",
-			);
+			]);
 		}
 		const token = releaseToken(options.token);
 		if (typeof token !== "string" || token.trim().length === 0) {
-			throw new EmptyTokenError();
+			throw new E_PARSEC_EMPTY_TOKEN();
 		}
 		return token;
 	}
 	if (options.public === true) return null;
-	throw new UnprotectedEndpointError(
+	throw new E_PARSEC_UNPROTECTED_ENDPOINT([
 		"the metrics endpoint has no token. Pass `token` (METRICS_TOKEN), or `public: true` if only your own network reaches this route.",
-	);
+	]);
 }
 
 /**

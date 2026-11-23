@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { NoopDriver } from "../../src/drivers/NoopDriver.js";
 import { OtelDriver, type OtelMeter } from "../../src/drivers/OtelDriver.js";
 import { PrometheusDriver } from "../../src/drivers/PrometheusDriver.js";
-import { ParsecError } from "../../src/errors.js";
+import { errors } from "../../src/index.js";
 
 interface Observation {
 	instrument: string;
@@ -293,7 +293,7 @@ describe("OtelDriver: removing and computing series", () => {
 				help: "g",
 				collect: () => {},
 			}),
-		).toThrow(ParsecError);
+		).toThrow(errors.E_PARSEC_INVALID_INSTRUMENT);
 	});
 });
 

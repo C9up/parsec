@@ -11,6 +11,7 @@
 
 import "./augmentations.js";
 import { instrumentHealthChecks } from "./diagnostics.js";
+import { E_PARSEC_INVALID_BINDING, E_PARSEC_INVALID_CONFIG } from "./errors.js";
 import { PARSEC_KEY } from "./http.js";
 import { type MetricsConfig, MetricsManager } from "./MetricsManager.js";
 import { clearMetrics, getMetrics, setMetrics } from "./services/main.js";
@@ -50,9 +51,7 @@ export default class ParsecProvider {
 	async #resolveManager(): Promise<MetricsManager> {
 		const resolved = await this.app.container.resolve(MetricsManager);
 		if (!(resolved instanceof MetricsManager)) {
-			throw new Error(
-				"[parsec] the container returned something that is not a MetricsManager for the MetricsManager token.",
-			);
+			throw new E_PARSEC_INVALID_BINDING();
 		}
 		return resolved;
 	}
@@ -65,9 +64,7 @@ export default class ParsecProvider {
 			// instrumentation can be written unconditionally.
 			if (raw === undefined) return new MetricsManager();
 			if (!isMetricsConfig(raw)) {
-				throw new Error(
-					"[parsec] config/metrics.ts must export defineConfig({ default, exporters }).",
-				);
+				throw new E_PARSEC_INVALID_CONFIG();
 			}
 			return new MetricsManager(raw);
 		});

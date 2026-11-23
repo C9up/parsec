@@ -34,18 +34,7 @@ export {
 	metricsHandler,
 	type ReleasableSecret,
 } from "./endpoint.js";
-export {
-	EmptyTokenError,
-	InstrumentConflictError,
-	InvalidInstrumentError,
-	InvalidLabelValueError,
-	InvalidMeasurementError,
-	InvalidMetricNameError,
-	ParsecError,
-	UndeclaredLabelError,
-	UnknownExporterError,
-	UnprotectedEndpointError,
-} from "./errors.js";
+export * as errors from "./errors.js";
 export {
 	defineConfig,
 	drivers,

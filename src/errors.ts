@@ -1,122 +1,101 @@
 /**
- * Parsec errors. No upstream package exists, so every code carries the
- * namespace — there is no upstream id to keep verbatim.
+ * Parsec errors, one per code. No upstream package exists, so every code
+ * carries the `E_PARSEC_` namespace.
  */
-
-export class ParsecError extends Error {
-	readonly code: string;
-
-	constructor(code: string, message: string, options?: ErrorOptions) {
-		super(message, options);
-		this.name = new.target.name;
-		this.code = code;
-	}
-}
+import { createError } from "@c9up/flare";
 
 /**
- * Raised at instrument creation for a name the exposition format cannot
- * carry.
+ * A metric or label name the exposition format cannot carry.
  *
- * At creation, deliberately — an invalid name accepted here produces a
- * scrape body Prometheus rejects wholesale, so ONE bad metric name silently
- * takes down every other metric in the process. Failing when the instrument
- * is declared makes it a startup error instead.
+ * Raised at instrument creation, deliberately: an invalid name accepted here
+ * produces a scrape body Prometheus rejects wholesale, so ONE bad metric name
+ * silently takes down every other metric in the process. Failing when the
+ * instrument is declared makes it a startup error instead.
  */
-export class InvalidMetricNameError extends ParsecError {
-	constructor(kind: "metric" | "label", name: string, reason: string) {
-		super(
-			"E_PARSEC_INVALID_NAME",
-			`Parsec: invalid ${kind} name "${name}" — ${reason}`,
-		);
-	}
-}
+export const E_PARSEC_INVALID_NAME = createError<[string, unknown, string]>(
+	'Parsec: invalid %s name "%s" — %s',
+	"E_PARSEC_INVALID_NAME",
+);
 
-/** Raised when a measurement is not a finite number. */
-export class InvalidMeasurementError extends ParsecError {
-	constructor(metric: string, value: unknown) {
-		super(
-			"E_PARSEC_INVALID_MEASUREMENT",
-			`Parsec: "${metric}" was given ${String(value)}; a measurement must be a finite number`,
-		);
-	}
-}
+/** A measurement that is not a finite number. */
+export const E_PARSEC_INVALID_MEASUREMENT = createError<[string, string]>(
+	'Parsec: "%s" was given %s; a measurement must be a finite number',
+	"E_PARSEC_INVALID_MEASUREMENT",
+);
 
 /**
- * Raised at declaration for an instrument whose options cannot be rendered
- * or exported: a missing help, unusable bucket bounds.
+ * An instrument whose options cannot be rendered or exported: a missing help,
+ * unusable bucket bounds.
  */
-export class InvalidInstrumentError extends ParsecError {
-	constructor(metric: string, reason: string) {
-		super("E_PARSEC_INVALID_INSTRUMENT", `Parsec: "${metric}" — ${reason}`);
-	}
-}
+export const E_PARSEC_INVALID_INSTRUMENT = createError<[string, string]>(
+	'Parsec: "%s" — %s',
+	"E_PARSEC_INVALID_INSTRUMENT",
+);
 
 /**
- * Raised when a label value is not a string or a finite number.
+ * A label value that is not a string or a finite number.
  *
- * At the call, deliberately: stored, it would only fail when rendered, and
- * then on every later scrape.
+ * Raised at the call, deliberately: stored, it would only fail when rendered,
+ * and then on every later scrape.
  */
-export class InvalidLabelValueError extends ParsecError {
-	constructor(metric: string, label: string, value: unknown) {
-		const shown = typeof value === "symbol" ? "a symbol" : typeof value;
-		super(
-			"E_PARSEC_INVALID_LABEL_VALUE",
-			`Parsec: "${metric}" was given ${shown === "number" ? String(value) : shown} for the label "${label}"; a label value must be a string or a finite number`,
-		);
-	}
-}
+export const E_PARSEC_INVALID_LABEL_VALUE = createError<
+	[string, string, string]
+>(
+	'Parsec: "%s" was given %s for the label "%s"; a label value must be a string or a finite number',
+	"E_PARSEC_INVALID_LABEL_VALUE",
+);
 
-/** Raised when an instrument is given a label it never declared. */
-export class UndeclaredLabelError extends ParsecError {
-	constructor(metric: string, label: string, declared: readonly string[]) {
-		super(
-			"E_PARSEC_UNDECLARED_LABEL",
-			`Parsec: "${metric}" was given the label "${label}", which it does not declare. Declared: ${declared.join(", ") || "(none)"}`,
-		);
-	}
-}
+/** An instrument given a label it never declared. */
+export const E_PARSEC_UNDECLARED_LABEL = createError<[string, string, string]>(
+	'Parsec: "%s" was given the label "%s", which it does not declare. Declared: %s',
+	"E_PARSEC_UNDECLARED_LABEL",
+);
 
-/** Raised when the same name is declared twice with a different shape. */
-export class InstrumentConflictError extends ParsecError {
-	constructor(name: string, detail: string) {
-		super(
-			"E_PARSEC_INSTRUMENT_CONFLICT",
-			`Parsec: "${name}" is already declared with a different ${detail}`,
-		);
-	}
-}
+/** The same name declared twice with a different shape. */
+export const E_PARSEC_INSTRUMENT_CONFLICT = createError<[string, string]>(
+	'Parsec: "%s" is already declared with a different %s',
+	"E_PARSEC_INSTRUMENT_CONFLICT",
+);
 
-/** Raised when a config names an exporter that does not exist. */
-export class UnknownExporterError extends ParsecError {
-	constructor(name: string, known: readonly string[]) {
-		super(
-			"E_PARSEC_UNKNOWN_EXPORTER",
-			`Parsec: unknown metrics exporter "${name}". Declared exporters: ${known.join(", ") || "(none)"}`,
-		);
-	}
-}
+/** A config naming an exporter that does not exist. */
+export const E_PARSEC_UNKNOWN_EXPORTER = createError<[string, string]>(
+	'Parsec: unknown metrics exporter "%s". Declared exporters: %s',
+	"E_PARSEC_UNKNOWN_EXPORTER",
+);
 
 /**
- * Raised when a scrape endpoint is built with neither a token nor an explicit
- * `public: true`.
+ * A scrape endpoint built with neither a token nor an explicit
+ * `public: true`, or with both.
  *
  * A metrics body names every route, its traffic and its error rate. A token
- * that was simply forgotten — an unset environment variable — must not be the
+ * that was simply forgotten (an unset environment variable) must not be the
  * thing that publishes it.
  */
-export class UnprotectedEndpointError extends ParsecError {
-	constructor(detail: string) {
-		super("E_PARSEC_UNPROTECTED_ENDPOINT", `Parsec: ${detail}`);
-	}
-}
+export const E_PARSEC_UNPROTECTED_ENDPOINT = createError<[string]>(
+	"Parsec: %s",
+	"E_PARSEC_UNPROTECTED_ENDPOINT",
+);
 
-/** Raised when a scrape endpoint is given an empty or blank token. */
-export class EmptyTokenError extends ParsecError {
-	constructor() {
-		super(
-			"E_PARSEC_EMPTY_TOKEN",
-			"Parsec: the metrics endpoint token is empty. An empty secret would match a request that sends no credentials; set METRICS_TOKEN or pass `public: true` deliberately.",
-		);
-	}
-}
+/** A scrape endpoint given an empty or blank token. */
+export const E_PARSEC_EMPTY_TOKEN = createError(
+	"Parsec: the metrics endpoint token is empty. An empty secret would match a request that sends no credentials; set METRICS_TOKEN or pass `public: true` deliberately.",
+	"E_PARSEC_EMPTY_TOKEN",
+);
+
+/** The metrics manager used before a provider or `setMetrics()` bound it. */
+export const E_PARSEC_NOT_BOOTED = createError<[string]>(
+	"[parsec] %s",
+	"E_PARSEC_NOT_BOOTED",
+);
+
+/** The container answered something that is not a MetricsManager. */
+export const E_PARSEC_INVALID_BINDING = createError(
+	"[parsec] the container returned something that is not a MetricsManager for the MetricsManager token.",
+	"E_PARSEC_INVALID_BINDING",
+);
+
+/** `config/metrics.ts` exports something `defineConfig()` did not build. */
+export const E_PARSEC_INVALID_CONFIG = createError(
+	"[parsec] config/metrics.ts must export defineConfig({ default, exporters }).",
+	"E_PARSEC_INVALID_CONFIG",
+);

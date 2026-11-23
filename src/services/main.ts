@@ -5,6 +5,7 @@
  *   metrics.counter({ name: "orders_total", help: "Orders placed." }).increment()
  */
 
+import { E_PARSEC_NOT_BOOTED } from "../errors.js";
 import { MetricsManager } from "../MetricsManager.js";
 
 let instance: MetricsManager | undefined;
@@ -40,10 +41,10 @@ const metrics: MetricsManager = new Proxy(placeholder, {
 		// import into a crash far from any real use.
 		if (typeof prop === "symbol" || prop === "then") return undefined;
 		if (!instance) {
-			throw new Error(
-				"[parsec] MetricsManager singleton accessed before ParsecProvider.boot() ran " +
+			throw new E_PARSEC_NOT_BOOTED([
+				"MetricsManager singleton accessed before ParsecProvider.boot() ran " +
 					"or `setMetrics(myManager)` was called. Wire one of them first.",
-			);
+			]);
 		}
 		const value = Reflect.get(instance, prop, instance);
 		return typeof value === "function" ? value.bind(instance) : value;

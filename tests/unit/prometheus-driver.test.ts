@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PrometheusDriver } from "../../src/drivers/PrometheusDriver.js";
-import {
-	InstrumentConflictError,
-	InvalidMeasurementError,
-	ParsecError,
-	UndeclaredLabelError,
-} from "../../src/errors.js";
+import { errors } from "../../src/index.js";
 
 describe("PrometheusDriver", () => {
 	it("renders a counter with HELP and TYPE", async () => {
@@ -24,19 +19,21 @@ describe("PrometheusDriver", () => {
 			name: "c_total",
 			help: "c",
 		});
-		expect(() => counter.increment(-1)).toThrow(InvalidMeasurementError);
+		expect(() => counter.increment(-1)).toThrow(
+			errors.E_PARSEC_INVALID_MEASUREMENT,
+		);
 	});
 
 	it("refuses a non-finite measurement, which would poison a sum forever", async () => {
 		const driver = new PrometheusDriver();
 		expect(() =>
 			driver.createGauge({ name: "g", help: "g" }).set(Number.NaN),
-		).toThrow(InvalidMeasurementError);
+		).toThrow(errors.E_PARSEC_INVALID_MEASUREMENT);
 		expect(() =>
 			driver
 				.createHistogram({ name: "h", help: "h" })
 				.observe(Number.POSITIVE_INFINITY),
-		).toThrow(InvalidMeasurementError);
+		).toThrow(errors.E_PARSEC_INVALID_MEASUREMENT);
 	});
 
 	it("raises on a label the instrument never declared", async () => {
@@ -48,7 +45,7 @@ describe("PrometheusDriver", () => {
 			labelNames: ["route"],
 		});
 		expect(() => counter.increment(1, { userId: "42" })).toThrow(
-			UndeclaredLabelError,
+			errors.E_PARSEC_UNDECLARED_LABEL,
 		);
 	});
 
@@ -161,7 +158,7 @@ describe("PrometheusDriver", () => {
 		const driver = new PrometheusDriver();
 		driver.createCounter({ name: "x_total", help: "x", labelNames: ["a"] });
 		expect(() => driver.createGauge({ name: "x_total", help: "x" })).toThrow(
-			InstrumentConflictError,
+			errors.E_PARSEC_INSTRUMENT_CONFLICT,
 		);
 		expect(() =>
 			driver.createCounter({ name: "x_total", help: "x", labelNames: ["b"] }),
@@ -267,11 +264,11 @@ describe("PrometheusDriver", () => {
 		});
 		const labels: Record<string, unknown> = { k: undefined };
 		expect(() => Reflect.apply(gauge.set, gauge, [1, labels])).toThrow(
-			ParsecError,
+			errors.E_PARSEC_INVALID_LABEL_VALUE,
 		);
 		expect(() =>
 			Reflect.apply(histogram.observe, histogram, [1, labels]),
-		).toThrow(ParsecError);
+		).toThrow(errors.E_PARSEC_INVALID_LABEL_VALUE);
 		expect(await driver.scrape()).toBe("");
 	});
 

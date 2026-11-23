@@ -1,12 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { OtelDriver, type OtelMeter } from "../../src/drivers/OtelDriver.js";
 import { PrometheusDriver } from "../../src/drivers/PrometheusDriver.js";
-import {
-	InstrumentConflictError,
-	InvalidMeasurementError,
-	InvalidMetricNameError,
-	UndeclaredLabelError,
-} from "../../src/errors.js";
+import { errors } from "../../src/index.js";
 import type { DriverOptions, MetricsDriver } from "../../src/types.js";
 
 /**
@@ -96,35 +91,35 @@ describe.each(cases)("instrument contract: $name", (c) => {
 		const { driver } = c.build();
 		expect(() =>
 			driver.createCounter({ name: "bad name!", help: "h" }),
-		).toThrow(InvalidMetricNameError);
+		).toThrow(errors.E_PARSEC_INVALID_NAME);
 		expect(() => driver.createGauge({ name: "1st", help: "h" })).toThrow(
-			InvalidMetricNameError,
+			errors.E_PARSEC_INVALID_NAME,
 		);
 		const options: Record<string, unknown> = { name: undefined, help: "h" };
 		expect(() =>
 			Reflect.apply(driver.createHistogram, driver, [options]),
-		).toThrow(InvalidMetricNameError);
+		).toThrow(errors.E_PARSEC_INVALID_NAME);
 	});
 
 	it("refuses an invalid, reserved or repeated label name", () => {
 		const { driver } = c.build();
 		expect(() =>
 			driver.createCounter({ name: "a_total", help: "h", labelNames: ["a-b"] }),
-		).toThrow(InvalidMetricNameError);
+		).toThrow(errors.E_PARSEC_INVALID_NAME);
 		expect(() =>
 			driver.createCounter({
 				name: "b_total",
 				help: "h",
 				labelNames: ["__name__"],
 			}),
-		).toThrow(InvalidMetricNameError);
+		).toThrow(errors.E_PARSEC_INVALID_NAME);
 		expect(() =>
 			driver.createCounter({
 				name: "c_total",
 				help: "h",
 				labelNames: ["route", "route"],
 			}),
-		).toThrow(InvalidMetricNameError);
+		).toThrow(errors.E_PARSEC_INVALID_NAME);
 	});
 
 	it("refuses a missing help", () => {
@@ -143,13 +138,15 @@ describe.each(cases)("instrument contract: $name", (c) => {
 			labelNames: ["route"],
 		});
 		expect(() => counter.increment(1, { userId: "42" })).toThrow(
-			UndeclaredLabelError,
+			errors.E_PARSEC_UNDECLARED_LABEL,
 		);
 		const gauge = driver.createGauge({ name: "g", help: "h" });
-		expect(() => gauge.set(1, { k: "v" })).toThrow(UndeclaredLabelError);
+		expect(() => gauge.set(1, { k: "v" })).toThrow(
+			errors.E_PARSEC_UNDECLARED_LABEL,
+		);
 		const histogram = driver.createHistogram({ name: "h", help: "h" });
 		expect(() => histogram.observe(1, { k: "v" })).toThrow(
-			UndeclaredLabelError,
+			errors.E_PARSEC_UNDECLARED_LABEL,
 		);
 	});
 
@@ -174,10 +171,18 @@ describe.each(cases)("instrument contract: $name", (c) => {
 		const gauge = driver.createGauge({ name: "g", help: "h" });
 		const histogram = driver.createHistogram({ name: "h", help: "h" });
 		for (const value of [Number.NaN, Number.POSITIVE_INFINITY]) {
-			expect(() => counter.increment(value)).toThrow(InvalidMeasurementError);
-			expect(() => gauge.set(value)).toThrow(InvalidMeasurementError);
-			expect(() => gauge.increment(value)).toThrow(InvalidMeasurementError);
-			expect(() => histogram.observe(value)).toThrow(InvalidMeasurementError);
+			expect(() => counter.increment(value)).toThrow(
+				errors.E_PARSEC_INVALID_MEASUREMENT,
+			);
+			expect(() => gauge.set(value)).toThrow(
+				errors.E_PARSEC_INVALID_MEASUREMENT,
+			);
+			expect(() => gauge.increment(value)).toThrow(
+				errors.E_PARSEC_INVALID_MEASUREMENT,
+			);
+			expect(() => histogram.observe(value)).toThrow(
+				errors.E_PARSEC_INVALID_MEASUREMENT,
+			);
 		}
 	});
 
@@ -187,10 +192,10 @@ describe.each(cases)("instrument contract: $name", (c) => {
 		const { driver } = c.build();
 		expect(() =>
 			driver.createCounter({ name: "c_total", help: "h" }).increment(-5),
-		).toThrow(InvalidMeasurementError);
+		).toThrow(errors.E_PARSEC_INVALID_MEASUREMENT);
 		expect(() =>
 			driver.createHistogram({ name: "h", help: "h" }).observe(-0.1),
-		).toThrow(InvalidMeasurementError);
+		).toThrow(errors.E_PARSEC_INVALID_MEASUREMENT);
 		// A gauge goes both ways.
 		const gauge = driver.createGauge({ name: "g", help: "h" });
 		expect(() => gauge.set(-3)).not.toThrow();
@@ -213,14 +218,14 @@ describe.each(cases)("instrument contract: $name", (c) => {
 		const { driver } = c.build();
 		driver.createCounter({ name: "x", help: "h", labelNames: ["a"] });
 		expect(() => driver.createHistogram({ name: "x", help: "h" })).toThrow(
-			InstrumentConflictError,
+			errors.E_PARSEC_INSTRUMENT_CONFLICT,
 		);
 		expect(() => driver.createGauge({ name: "x", help: "h" })).toThrow(
-			InstrumentConflictError,
+			errors.E_PARSEC_INSTRUMENT_CONFLICT,
 		);
 		expect(() =>
 			driver.createCounter({ name: "x", help: "h", labelNames: ["b"] }),
-		).toThrow(InstrumentConflictError);
+		).toThrow(errors.E_PARSEC_INSTRUMENT_CONFLICT);
 	});
 
 	it("refuses one name re-declared with a different help, unit, bucket list or collect", () => {

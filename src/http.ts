@@ -15,6 +15,7 @@
  * the context the host hands it, so parsec never imports `@c9up/ream`.
  */
 
+import { E_PARSEC_NOT_BOOTED } from "./errors.js";
 import { MetricsManager } from "./MetricsManager.js";
 import type { Counter, Gauge, Histogram, Labels } from "./types.js";
 
@@ -151,9 +152,9 @@ export async function parsecHttpMiddleware(
 ): Promise<void> {
 	const resolved = await ctx.containerResolver?.make(PARSEC_KEY);
 	if (!isManager(resolved)) {
-		throw new Error(
-			"[parsec] ParsecProvider must bind parsec.metrics before the middleware runs, and the host must expose ctx.containerResolver.",
-		);
+		throw new E_PARSEC_NOT_BOOTED([
+			"ParsecProvider must bind parsec.metrics before the middleware runs, and the host must expose ctx.containerResolver.",
+		]);
 	}
 	const { total, duration, inFlight } = instrumentsFor(resolved);
 	const method = methodLabel(ctx.request.method());

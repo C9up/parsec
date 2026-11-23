@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { InvalidMetricNameError } from "../../src/errors.js";
 import {
 	assertLabelName,
 	assertMetricName,
@@ -8,6 +7,7 @@ import {
 	formatLabels,
 	formatValue,
 } from "../../src/exposition.js";
+import { errors } from "../../src/index.js";
 
 describe("exposition format", () => {
 	it("escapes the backslash first, so an escaped quote is not re-escaped", () => {
@@ -31,9 +31,9 @@ describe("exposition format", () => {
 		// One bad name would otherwise make the whole scrape body unparseable,
 		// taking every other metric in the process down with it.
 		expect(() => assertMetricName("http-requests")).toThrow(
-			InvalidMetricNameError,
+			errors.E_PARSEC_INVALID_NAME,
 		);
-		expect(() => assertMetricName("1xx")).toThrow(InvalidMetricNameError);
+		expect(() => assertMetricName("1xx")).toThrow(errors.E_PARSEC_INVALID_NAME);
 		expect(() => assertMetricName("http_requests_total")).not.toThrow();
 		expect(() => assertMetricName("app:requests:rate")).not.toThrow();
 	});
@@ -41,7 +41,7 @@ describe("exposition format", () => {
 	it("refuses label names reserved for the scraper", () => {
 		expect(() => assertLabelName("__name__")).toThrow(/reserved/);
 		expect(() => assertLabelName("route")).not.toThrow();
-		expect(() => assertLabelName("a:b")).toThrow(InvalidMetricNameError);
+		expect(() => assertLabelName("a:b")).toThrow(errors.E_PARSEC_INVALID_NAME);
 	});
 
 	it("writes infinities the way the format spells them", () => {

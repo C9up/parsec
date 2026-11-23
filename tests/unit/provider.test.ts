@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { NoopDriver } from "../../src/drivers/NoopDriver.js";
 import { PrometheusDriver } from "../../src/drivers/PrometheusDriver.js";
-import { UnknownExporterError } from "../../src/errors.js";
 import { PARSEC_KEY } from "../../src/http.js";
+import { errors } from "../../src/index.js";
 import {
 	defineConfig,
 	drivers,
@@ -60,7 +60,10 @@ describe("ParsecProvider", () => {
 			app({ metrics: { driver: "prometheus" } }),
 		);
 		provider.register();
-		await expect(provider.boot()).rejects.toThrow(/defineConfig/);
+		await expect(provider.boot()).rejects.toMatchObject({
+			code: "E_PARSEC_INVALID_CONFIG",
+			message: expect.stringMatching(/defineConfig/),
+		});
 	});
 
 	it("binds both the middleware token and the bare one", () => {
@@ -110,7 +113,10 @@ describe("ParsecProvider", () => {
 		const provider = new ParsecProvider(host);
 		provider.register();
 		host.bindings.set(MetricsManager, () => ({ notAManager: true }));
-		await expect(provider.boot()).rejects.toThrow(/not a MetricsManager/);
+		await expect(provider.boot()).rejects.toMatchObject({
+			code: "E_PARSEC_INVALID_BINDING",
+			message: expect.stringMatching(/not a MetricsManager/),
+		});
 	});
 });
 
@@ -124,7 +130,10 @@ describe("services/main", () => {
 	it("reports clearly when used before anything bound it", () => {
 		clearMetrics();
 		expect(() => metrics.counter({ name: "x", help: "x" })).toThrow(
-			/before ParsecProvider.boot/,
+			expect.objectContaining({
+				code: "E_PARSEC_NOT_BOOTED",
+				message: expect.stringMatching(/before ParsecProvider.boot/),
+			}),
 		);
 	});
 
@@ -195,7 +204,7 @@ describe("MetricsManager", () => {
 					default: "otel",
 					exporters: { prometheus: drivers.prometheus() },
 				}),
-		).toThrow(UnknownExporterError);
+		).toThrow(errors.E_PARSEC_UNKNOWN_EXPORTER);
 	});
 
 	it("refuses an exporter name inherited from Object.prototype", () => {
@@ -215,14 +224,16 @@ describe("MetricsManager", () => {
 						exporters: { prometheus: drivers.prometheus() },
 					}),
 				name,
-			).toThrow(UnknownExporterError);
+			).toThrow(errors.E_PARSEC_UNKNOWN_EXPORTER);
 		}
 		const metrics = new MetricsManager({
 			default: "prometheus",
 			exporters: { prometheus: drivers.prometheus() },
 		});
 		for (const name of ["constructor", "toString", "__proto__"]) {
-			expect(() => metrics.use(name), name).toThrow(UnknownExporterError);
+			expect(() => metrics.use(name), name).toThrow(
+				errors.E_PARSEC_UNKNOWN_EXPORTER,
+			);
 		}
 	});
 
@@ -230,7 +241,7 @@ describe("MetricsManager", () => {
 		const exporters: Record<string, unknown> = { p: "prometheus" };
 		const config: Record<string, unknown> = { default: "p", exporters };
 		expect(() => Reflect.construct(MetricsManager, [config])).toThrow(
-			UnknownExporterError,
+			errors.E_PARSEC_UNKNOWN_EXPORTER,
 		);
 	});
 

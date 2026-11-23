@@ -172,7 +172,10 @@ describe("http middleware", () => {
 	it("reports clearly when the provider never bound the manager", async () => {
 		await expect(
 			parsecHttpMiddleware(context(undefined), async () => {}),
-		).rejects.toThrow(/ParsecProvider must bind/);
+		).rejects.toMatchObject({
+			code: "E_PARSEC_NOT_BOOTED",
+			message: expect.stringMatching(/ParsecProvider must bind/),
+		});
 	});
 
 	it("exposes the class form ream's lazy resolver instantiates", async () => {

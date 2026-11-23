@@ -7,12 +7,12 @@
  */
 
 import {
-	InstrumentConflictError,
-	InvalidInstrumentError,
-	InvalidLabelValueError,
-	InvalidMeasurementError,
-	InvalidMetricNameError,
-	UndeclaredLabelError,
+	E_PARSEC_INSTRUMENT_CONFLICT,
+	E_PARSEC_INVALID_INSTRUMENT,
+	E_PARSEC_INVALID_LABEL_VALUE,
+	E_PARSEC_INVALID_MEASUREMENT,
+	E_PARSEC_INVALID_NAME,
+	E_PARSEC_UNDECLARED_LABEL,
 } from "./errors.js";
 import { assertLabelName, assertMetricName } from "./exposition.js";
 import type { EndTimer, InstrumentOptions, Labels } from "./types.js";
@@ -44,10 +44,10 @@ export function declareInstrument(options: InstrumentOptions): Declaration {
 	assertHelp(options.name, options.help);
 	const labelNames = options.labelNames ?? [];
 	if (!Array.isArray(labelNames)) {
-		throw new InvalidInstrumentError(
+		throw new E_PARSEC_INVALID_INSTRUMENT([
 			options.name,
 			"labelNames must be an array",
-		);
+		]);
 	}
 	const seen = new Set<string>();
 	for (const label of labelNames) {
@@ -55,16 +55,16 @@ export function declareInstrument(options: InstrumentOptions): Declaration {
 		// Declared twice, a label renders twice on one line, which the
 		// scraper rejects along with everything else in the body.
 		if (seen.has(label)) {
-			throw new InvalidMetricNameError("label", label, "it is declared twice");
+			throw new E_PARSEC_INVALID_NAME(["label", label, "it is declared twice"]);
 		}
 		seen.add(label);
 	}
 	const unit = options.unit;
 	if (unit !== undefined && (typeof unit !== "string" || !UNIT.test(unit))) {
-		throw new InvalidInstrumentError(
+		throw new E_PARSEC_INVALID_INSTRUMENT([
 			options.name,
 			"its unit must be 1 to 63 printable ASCII characters",
-		);
+		]);
 	}
 	return {
 		name: options.name,
@@ -89,10 +89,10 @@ export function assertMeasurement(
 	nonNegative: boolean,
 ): void {
 	if (typeof value !== "number" || !Number.isFinite(value)) {
-		throw new InvalidMeasurementError(metric, value);
+		throw new E_PARSEC_INVALID_MEASUREMENT([metric, String(value)]);
 	}
 	if (nonNegative && value < 0) {
-		throw new InvalidMeasurementError(metric, value);
+		throw new E_PARSEC_INVALID_MEASUREMENT([metric, String(value)]);
 	}
 }
 
@@ -156,9 +156,10 @@ export class InstrumentRegistry<C, G, H> {
 	): Entry<C, G, H> | undefined {
 		const existing = this.#entries.get(name);
 		if (!existing) return undefined;
-		if (existing.kind !== kind) throw new InstrumentConflictError(name, "type");
+		if (existing.kind !== kind)
+			throw new E_PARSEC_INSTRUMENT_CONFLICT([name, "type"]);
 		const differs = difference(existing, shape);
-		if (differs) throw new InstrumentConflictError(name, differs);
+		if (differs) throw new E_PARSEC_INSTRUMENT_CONFLICT([name, differs]);
 		return existing;
 	}
 
@@ -244,7 +245,7 @@ export const DEFAULT_MAX_SERIES = 1_000;
 /** Validate a HELP text at declaration. */
 export function assertHelp(name: string, help: unknown): void {
 	if (typeof help !== "string") {
-		throw new InvalidInstrumentError(name, "its help must be a string");
+		throw new E_PARSEC_INVALID_INSTRUMENT([name, "its help must be a string"]);
 	}
 }
 
@@ -260,7 +261,12 @@ function labelValue(metric: string, label: string, value: unknown): string {
 	if (typeof value === "string") return value;
 	if (typeof value === "number" && Number.isFinite(value)) return String(value);
 	if (typeof value === "boolean") return String(value);
-	throw new InvalidLabelValueError(metric, label, value);
+	const shown = typeof value === "symbol" ? "a symbol" : typeof value;
+	throw new E_PARSEC_INVALID_LABEL_VALUE([
+		metric,
+		shown === "number" ? String(value) : shown,
+		label,
+	]);
 }
 
 /**
@@ -282,7 +288,11 @@ export function normaliseLabels(
 	if (labels) {
 		for (const [key, value] of Object.entries(labels)) {
 			if (!labelNames.includes(key)) {
-				throw new UndeclaredLabelError(metric, key, labelNames);
+				throw new E_PARSEC_UNDECLARED_LABEL([
+					metric,
+					key,
+					labelNames.join(", ") || "(none)",
+				]);
 			}
 			out[key] = labelValue(metric, key, value);
 		}
@@ -327,24 +337,24 @@ export function histogramBuckets(
 	buckets: readonly number[] | undefined,
 ): number[] {
 	if (labelNames.includes("le")) {
-		throw new InvalidMetricNameError(
+		throw new E_PARSEC_INVALID_NAME([
 			"label",
 			"le",
 			"it is reserved for histogram buckets",
-		);
+		]);
 	}
 	const given = buckets ?? DEFAULT_BUCKETS;
 	if (!Array.isArray(given)) {
-		throw new InvalidInstrumentError(metric, "buckets must be an array");
+		throw new E_PARSEC_INVALID_INSTRUMENT([metric, "buckets must be an array"]);
 	}
 	const finite: number[] = [];
 	for (const bound of given) {
 		if (bound === Number.POSITIVE_INFINITY) continue;
 		if (typeof bound !== "number" || !Number.isFinite(bound)) {
-			throw new InvalidInstrumentError(
+			throw new E_PARSEC_INVALID_INSTRUMENT([
 				metric,
 				`bucket bound ${String(bound)} is not a finite number`,
-			);
+			]);
 		}
 		finite.push(bound);
 	}
@@ -375,7 +385,10 @@ export async function timed<T>(
 /** Validate a `collect` option at declaration. */
 export function assertCollect(metric: string, collect: unknown): void {
 	if (collect !== undefined && typeof collect !== "function") {
-		throw new InvalidInstrumentError(metric, "collect must be a function");
+		throw new E_PARSEC_INVALID_INSTRUMENT([
+			metric,
+			"collect must be a function",
+		]);
 	}
 }
 

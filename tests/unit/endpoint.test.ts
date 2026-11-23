@@ -3,7 +3,7 @@ import {
 	type MetricsEndpointContext,
 	metricsHandler,
 } from "../../src/endpoint.js";
-import { ParsecError } from "../../src/errors.js";
+import { errors } from "../../src/index.js";
 import { drivers, MetricsManager } from "../../src/MetricsManager.js";
 
 function context(authorization?: string) {
@@ -109,7 +109,9 @@ describe("metricsHandler", () => {
 		expect(() => metricsHandler(withOrders())).toThrow(
 			expect.objectContaining({ code: "E_PARSEC_UNPROTECTED_ENDPOINT" }),
 		);
-		expect(() => metricsHandler(withOrders(), {})).toThrow(ParsecError);
+		expect(() => metricsHandler(withOrders(), {})).toThrow(
+			errors.E_PARSEC_UNPROTECTED_ENDPOINT,
+		);
 		expect(() => metricsHandler(withOrders(), { public: false })).toThrow(
 			expect.objectContaining({ code: "E_PARSEC_UNPROTECTED_ENDPOINT" }),
 		);
@@ -135,7 +137,7 @@ describe("metricsHandler", () => {
 	it("refuses a token and public together, which contradict each other", () => {
 		expect(() =>
 			metricsHandler(withOrders(), { token: "secret", public: true }),
-		).toThrow(ParsecError);
+		).toThrow(errors.E_PARSEC_UNPROTECTED_ENDPOINT);
 	});
 
 	it("accepts the token as a secret wrapper, as Env.schema.secret() returns it", async () => {
