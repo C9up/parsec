@@ -40,6 +40,7 @@ export {
 	drivers,
 	type MetricsConfig,
 	MetricsManager,
+	type MetricsRecorder,
 } from "./MetricsManager.js";
 export type {
 	Collect,

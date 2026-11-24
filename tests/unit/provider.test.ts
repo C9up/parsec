@@ -1,8 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { NoopDriver } from "../../src/drivers/NoopDriver.js";
 import { PrometheusDriver } from "../../src/drivers/PrometheusDriver.js";
 import { PARSEC_KEY } from "../../src/http.js";
-import { errors } from "../../src/index.js";
+import { errors, type MetricsRecorder } from "../../src/index.js";
 import {
 	defineConfig,
 	drivers,
@@ -261,6 +261,17 @@ describe("MetricsManager", () => {
 		});
 		expect(metrics.use()).toBe(metrics.use("p"));
 		expect(factory).toHaveBeenCalledTimes(1);
+	});
+
+	it("types use() with the recorder the package entry exports", async () => {
+		const metrics = new MetricsManager({
+			default: "p",
+			exporters: { p: drivers.prometheus() },
+		});
+		const recorder: MetricsRecorder = metrics.use("p");
+		expectTypeOf(metrics.use).returns.toEqualTypeOf<MetricsRecorder>();
+		recorder.counter({ name: "typed_total", help: "typed" }).increment();
+		expect(await recorder.scrape()).toContain("typed_total 1");
 	});
 
 	it("does not build an exporter the application never asks for", () => {
